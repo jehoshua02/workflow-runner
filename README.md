@@ -42,10 +42,16 @@ workflow-runner start <workflow> --input-json c.json
 workflow-runner tick                    # run once: advance everything that can move
 workflow-runner tick --loop --interval 60
 workflow-runner status                  # tree: inputs + child workflows
-workflow-runner approve <input-id> [gate]        # answer a pending decision + tick
-workflow-runner reject <input-id> <reason> [gate] # answer + tick
+workflow-runner approve <input-id> [gate]        # answer a pending decision (write-only)
+workflow-runner reject <input-id> <reason> [gate] # answer a pending decision (write-only)
 workflow-runner retry <input-id>    # HALTED -> RUNNING at the failed step
+workflow-runner serve [--port 8765] # local web UI: browse inputs/runs/decisions/workflows, approve/reject
 ```
+
+Only `tick` executes steps. `approve`, `reject` and the web UI write the
+decision file; `tick` (or a running `tick --loop`) acts on it — one ticker,
+one writer of state. The UI binds 127.0.0.1 only; its approve/reject form
+carries a per-server token and refuses cross-origin POSTs.
 
 Defaults resolve only at this edge (CLI + config.yml); the engine requires
 every value explicitly.

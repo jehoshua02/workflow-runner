@@ -10,9 +10,13 @@ Commands:
   workflow-runner start <workflow> --input-json c.json    enqueue an input
   workflow-runner tick [--loop] [--interval 60]           run once; --loop runs forever
   workflow-runner status                                  one line per input
-  workflow-runner approve <input-id> [gate]               answer a pending decision, then tick
-  workflow-runner reject <input-id> <reason> [gate]       answer a pending decision, then tick
+  workflow-runner approve <input-id> [gate]               answer a pending decision (write-only)
+  workflow-runner reject <input-id> <reason> [gate]       answer a pending decision (write-only)
   workflow-runner retry <input-id>                        HALTED -> RUNNING at failed step
+  workflow-runner serve [--port 8765]                     local web UI (127.0.0.1 only)
+
+Only `tick` executes steps. approve/reject/serve write decisions; a running
+`tick --loop` picks them up — one ticker, one writer of state.
 """
 import argparse
 import json
@@ -22,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from . import decisions, engine, state
+from . import decisions, engine, state, web
 from .config import load_config
 from .executors import agent_exec, python_exec
 from .workflow import load_registry
@@ -33,6 +37,7 @@ def _clock() -> str:
 
 
 def _load(args) -> tuple:
+    """(config, registry, sources) — sources = {name: yaml text}, shown by the web UI."""
     workflow_dir = Path(args.workflow_dir).resolve()
     if not workflow_dir.is_dir():
         raise SystemExit(f"no workflow/ directory at {workflow_dir}")
@@ -51,7 +56,7 @@ def _load(args) -> tuple:
                         f"{wf.name}/{step.id}: kind `agent` requires `agent_command` in "
                         "config.yml (use `kind: claude` for the Claude Code CLI)"
                     )
-    return config, registry
+    return config, registry, texts
 
 
 def _context(config, registry) -> engine.Context:
@@ -65,7 +70,7 @@ def _context(config, registry) -> engine.Context:
 
 
 def cmd_start(args) -> None:
-    config, registry = _load(args)
+    config, registry, _ = _load(args)
     if args.workflow not in registry:
         raise SystemExit(f"unknown workflow `{args.workflow}` — have: {sorted(registry)}")
     workflow = registry[args.workflow]
@@ -102,7 +107,7 @@ def _tick_once(config, registry) -> list:
 
 
 def cmd_tick(args) -> None:
-    config, registry = _load(args)
+    config, registry, _ = _load(args)
     while True:
         lines = _tick_once(config, registry)
         if not args.loop:
@@ -114,7 +119,7 @@ def cmd_tick(args) -> None:
 
 
 def cmd_status(args) -> None:
-    config, _ = _load(args)
+    config, _, _ = _load(args)
     paths = sorted(config.inputs_dir.glob("*.json")) if config.inputs_dir.exists() else []
     if not paths:
         print("no inputs")
@@ -140,15 +145,13 @@ def _resolve_decision(config, input_id: str, gate: str | None) -> Path:
 
 
 def _answer(args, line: str) -> None:
-    config, registry = _load(args)
+    config, _, _ = _load(args)
     path = _resolve_decision(config, args.input_id, args.gate)
     try:
         decisions.respond(path, line)
     except (FileNotFoundError, ValueError) as exc:
         raise SystemExit(str(exc))
-    print(f"{path.name}: {line}")
-    for out in _tick_once(config, registry):
-        print(out)
+    print(f"{path.name}: {line} — `tick` (or a running `tick --loop`) will act on it")
 
 
 def cmd_approve(args) -> None:
@@ -160,7 +163,7 @@ def cmd_reject(args) -> None:
 
 
 def cmd_retry(args) -> None:
-    config, _ = _load(args)
+    config, _, _ = _load(args)
     path = state.state_path(config.inputs_dir, args.input_id)
     if not path.exists():
         raise SystemExit(f"no state for {args.input_id}")
@@ -171,6 +174,18 @@ def cmd_retry(args) -> None:
     state.record(s, "retried", {"step": s.current_step}, _clock())
     state.save_state(path, s)
     print(f"{args.input_id}: RUNNING @ {s.current_step} — run `tick` to execute")
+
+
+def cmd_serve(args) -> None:
+    config, registry, sources = _load(args)
+    server = web.make_server(config, registry, sources, "127.0.0.1", args.port)
+    print(f"workflow-runner ui: http://127.0.0.1:{server.server_address[1]}  (ctrl-c to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 def main() -> None:
@@ -204,6 +219,10 @@ def main() -> None:
     retry = sub.add_parser("retry")
     retry.add_argument("input_id")
     retry.set_defaults(func=cmd_retry)
+
+    serve = sub.add_parser("serve")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     args.func(args)
