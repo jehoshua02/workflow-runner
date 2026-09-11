@@ -3,7 +3,7 @@ workflow: analyze
 
 steps:
   - id: classify
-    executor: agent
+    kind: claude
     prompt: classify.md
     model: claude-haiku-4-5-20251001   # trivial judgment — cheapest model
     allowed_tools: [Read]

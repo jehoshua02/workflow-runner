@@ -3,7 +3,7 @@ workflow: greet
 
 steps:
   - id: analyze
-    executor: workflow
+    kind: workflow
     run: analyze
     inputs: [candidate.word]
     outputs:
@@ -15,7 +15,7 @@ steps:
       OTHER: halt
 
   - id: respond
-    executor: python
+    kind: python
     run: steps.respond
     inputs: [candidate.word, analyze.reason]
     outputs:

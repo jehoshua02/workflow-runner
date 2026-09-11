@@ -1,8 +1,10 @@
 """Load and validate a workflow definition from YAML.
 
-A workflow is a set of steps. Each step is executed by exactly one executor:
+A workflow is a set of steps. Each step is executed by exactly one kind of executor:
 - python:   calls a function in the project's steps module
-- agent:    renders a prompt file and runs a headless agent
+- claude:   renders a prompt file and runs it through the Claude Code CLI
+            (built in — no config needed)
+- agent:    like claude, but any runtime: requires `agent_command` in config
 - workflow: runs a child workflow (composition) and maps its `returns`
             to this step's outputs
 
@@ -18,7 +20,8 @@ from dataclasses import dataclass
 import yaml
 
 BUILTIN_TARGETS = {"halt", "done"}
-EXECUTORS = {"python", "agent", "workflow"}
+KINDS = {"python", "claude", "agent", "workflow"}
+PROMPT_KINDS = {"claude", "agent"}
 STATUSES = {"RUNNING", "WAITING_DECISION", "HALTED", "DONE"}
 
 
@@ -29,7 +32,7 @@ class WorkflowError(ValueError):
 @dataclass(frozen=True)
 class Step:
     id: str
-    executor: str
+    kind: str
     run: str | None
     prompt: str | None
     model: str | None
@@ -59,34 +62,34 @@ def _build_step(raw: dict) -> Step:
     _require(isinstance(raw, dict), f"step must be a mapping, got {type(raw).__name__}")
     _require("id" in raw, "step missing required field: id")
     step_id = raw["id"]
-    executor = raw.get("executor")
-    _require(executor in EXECUTORS, f"step {step_id}: executor must be one of {sorted(EXECUTORS)}")
+    kind = raw.get("kind")
+    _require(kind in KINDS, f"step {step_id}: kind must be one of {sorted(KINDS)}")
 
     run = raw.get("run")
     prompt = raw.get("prompt")
     model = raw.get("model")
-    if executor == "python":
+    if kind == "python":
         _require(isinstance(run, str) and run, f"step {step_id}: python step requires `run`")
         _require(prompt is None, f"step {step_id}: python step must not set `prompt`")
-    elif executor == "workflow":
+    elif kind == "workflow":
         _require(isinstance(run, str) and run, f"step {step_id}: workflow step requires `run` (child workflow name)")
         _require(prompt is None and model is None, f"step {step_id}: workflow step must not set `prompt`/`model`")
-    else:
-        _require(isinstance(prompt, str) and prompt, f"step {step_id}: agent step requires `prompt`")
-        _require(isinstance(model, str) and model, f"step {step_id}: agent step requires `model`")
-        _require(run is None, f"step {step_id}: agent step must not set `run`")
+    else:  # claude | agent
+        _require(isinstance(prompt, str) and prompt, f"step {step_id}: {kind} step requires `prompt`")
+        _require(isinstance(model, str) and model, f"step {step_id}: {kind} step requires `model`")
+        _require(run is None, f"step {step_id}: {kind} step must not set `run`")
 
     allowed_tools = tuple(raw.get("allowed_tools", ()))
     _require(
         all(isinstance(t, str) for t in allowed_tools),
         f"step {step_id}: allowed_tools must be strings",
     )
-    if executor == "agent":
-        # containment before autonomy: an agent step without an explicit tool
+    if kind in PROMPT_KINDS:
+        # containment before autonomy: a prompt step without an explicit tool
         # allowlist is uncontained and therefore invalid
         _require(
             len(allowed_tools) > 0,
-            f"step {step_id}: agent step requires a non-empty allowed_tools list",
+            f"step {step_id}: {kind} step requires a non-empty allowed_tools list",
         )
 
     inputs = tuple(raw.get("inputs", ()))
@@ -126,7 +129,7 @@ def _build_step(raw: dict) -> Step:
 
     return Step(
         id=step_id,
-        executor=executor,
+        kind=kind,
         run=run,
         prompt=prompt,
         model=model,
@@ -206,7 +209,7 @@ def load_registry(texts: dict) -> dict:
         registry[name] = wf
     for wf in registry.values():
         for step in wf.steps.values():
-            if step.executor != "workflow":
+            if step.kind != "workflow":
                 continue
             _require(
                 step.run in registry,
