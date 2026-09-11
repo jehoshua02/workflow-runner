@@ -3,7 +3,9 @@
 A deterministic workflow runner that uses AI agents only at judgment points.
 
 Workflows are data (YAML); mechanics are Python; agents run headlessly on
-templated prompts and return schema-validated JSON. Agents never move
+templated prompts and return schema-validated JSON. `kind: claude` (the
+Claude Code CLI) is built in; `kind: agent` runs any other runtime via a
+project-configured `agent_command`. Agents never move
 workflow state — the runner routes on their declared outputs. Human
 approvals are decision files: the runner halts and resumes on an
 `approved` / `rejected: <reason>` reply. Any unexpected state halts the
@@ -52,10 +54,10 @@ every value explicitly.
 workflow: my-workflow
 steps:
   - id: triage
-    executor: agent              # python | agent | workflow
-    prompt: triage.md            # agent: file in prompts/
-    model: <model-id>            # agent: required
-    allowed_tools: [Read, Grep]  # agent: required — containment before autonomy
+    kind: claude                 # python | claude | agent | workflow
+    prompt: triage.md            # claude/agent: file in prompts/
+    model: <model-id>            # claude/agent: required
+    allowed_tools: [Read, Grep]  # claude/agent: required — containment before autonomy
     inputs: [candidate.fqn, other_step.field]   # dotted, explicit, no ambient state
     outputs:
       verdict: {enum: [DEAD, ALIVE, UNCLEAR]}
@@ -66,14 +68,14 @@ steps:
       ALIVE: done                # builtins: done, halt
       UNCLEAR: halt
   - id: next_step
-    executor: python
+    kind: python
     run: steps.prepare           # function in steps.py
     inputs: [triage.evidence]
     outputs: {branch: str}
     next: publish                # unconditional chain (mutually exclusive with route)
     gate: merge-approval         # halts for a human decision before executing
   - id: publish
-    executor: workflow           # composition: runs a child workflow
+    kind: workflow           # composition: runs a child workflow
     run: publish-flow            # workflows/publish-flow.yaml
     inputs: [next_step.branch]   # become the child's candidate fields (last segment)
     outputs: {pr_url: str}       # must be covered by the child's `returns`

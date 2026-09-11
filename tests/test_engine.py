@@ -13,7 +13,7 @@ DEMO_YAML = """
 workflow: demo
 steps:
   - id: triage
-    executor: agent
+    kind: claude
     prompt: triage.md
     model: test-model
     allowed_tools: [Read]
@@ -27,7 +27,7 @@ steps:
       ALIVE: done
       UNCLEAR: halt
   - id: prepare
-    executor: python
+    kind: python
     run: steps.prepare
     inputs: [triage.evidence]
     outputs:
@@ -43,14 +43,14 @@ PARENT_YAML = """
 workflow: parent
 steps:
   - id: sub
-    executor: workflow
+    kind: workflow
     run: demo
     inputs: [candidate.fqn]
     outputs:
       branch: str
     next: wrap
   - id: wrap
-    executor: python
+    kind: python
     run: steps.wrap
     inputs: [sub.branch]
     outputs:
@@ -108,6 +108,15 @@ class TestEngine(unittest.TestCase):
             s = h.tick()
             self.assertEqual(s.status, "DONE")
             self.assertIn("Candidate: A::b", h.run.calls[0][1])
+            self.assertEqual(h.run.calls[0][0][:2], ["claude", "-p"])  # built-in executor
+
+    def test_generic_agent_without_command_halts(self):
+        with TemporaryDirectory() as tmp:
+            generic = DEMO_YAML.replace("kind: claude", "kind: agent")
+            h = EngineHarness(Path(tmp), [], {"demo": generic}, None, "demo")
+            s = h.tick()
+            self.assertEqual(s.status, "HALTED")
+            self.assertIn("agent_command", s.history[-1]["detail"]["reason"])
 
     def test_unclear_halts_with_decision_file(self):
         with TemporaryDirectory() as tmp:

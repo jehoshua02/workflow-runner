@@ -12,9 +12,10 @@ Project layout convention (discovered from the project root):
 Defaults live HERE, at the edge — everything downstream (engine, executors)
 receives fully-resolved values and has no defaults of its own.
 
-agent_command is an argv template owned by the project layer; the engine only
-knows "spawn this command, feed the prompt on stdin, expect JSON back".
-Templates: {model} and {allowed_tools} (comma-joined) are substituted per-arg.
+agent_command is required only if a workflow uses `kind: agent` (a
+non-Claude runtime): an argv template, {model} and {allowed_tools}
+(comma-joined) substituted per-arg. `kind: claude` needs no config —
+the Claude Code CLI invocation is built in.
 
 on_event names a function in steps.py (`steps.<name>`) called with one dict
 {"event", "candidate", "detail", "decision_path"} on gate_opened and halted —
@@ -23,16 +24,6 @@ the project's bridge from engine decisions to wherever humans look.
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_AGENT_COMMAND = (
-    "claude",
-    "-p",
-    "--output-format",
-    "json",
-    "--model",
-    "{model}",
-    "--allowedTools",
-    "{allowed_tools}",
-)
 DEFAULT_MAX_STEP_VISITS = 3
 DEFAULT_MAX_DEPTH = 5
 
@@ -50,7 +41,7 @@ class RunnerConfig:
     runs_dir: Path
     decisions_dir: Path
     log_path: Path
-    agent_command: tuple
+    agent_command: tuple | None
     max_step_visits: int
     max_depth: int
     on_event: str | None
@@ -62,9 +53,7 @@ def load_config(workflow_dir: Path, raw: dict) -> RunnerConfig:
     state = workflow_dir / ".state"
 
     agent_command = raw.get("agent_command")
-    if agent_command is None:
-        agent_command = DEFAULT_AGENT_COMMAND
-    elif (
+    if agent_command is not None and (
         not isinstance(agent_command, list)
         or not agent_command
         or not all(isinstance(a, str) for a in agent_command)
@@ -91,7 +80,7 @@ def load_config(workflow_dir: Path, raw: dict) -> RunnerConfig:
         runs_dir=state / "runs",
         decisions_dir=state / "decisions",
         log_path=state / "log.jsonl",
-        agent_command=tuple(agent_command),
+        agent_command=tuple(agent_command) if agent_command is not None else None,
         max_step_visits=_positive_int("max_step_visits", DEFAULT_MAX_STEP_VISITS),
         max_depth=_positive_int("max_depth", DEFAULT_MAX_DEPTH),
         on_event=on_event,

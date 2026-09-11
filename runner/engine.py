@@ -6,7 +6,7 @@ and fire the project's optional on_event hook — the engine never improvises
 and knows nothing about inboxes. Subagents never move workflow state: the
 engine routes on their declared outputs.
 
-Composition: `executor: workflow` runs a child workflow as its own candidate
+Composition: `kind: workflow` runs a child workflow as its own candidate
 (id `<parent>.<step>`), recursively. Child DONE → its `returns` become the
 step's outputs; child WAITING_DECISION propagates; child HALTED halts the
 parent. Depth is bounded by config.max_depth.
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from . import decisions, inputs, outputs, rendering, runlog, state as state_mod
 from .config import RunnerConfig, render_agent_argv
-from .executors import agent_exec, python_exec
+from .executors import agent_exec, claude_exec, python_exec
 from .state import CandidateState, record
 
 _WAIT = object()  # sentinel: child workflow is waiting on a human decision
@@ -133,16 +133,24 @@ def _run_child_workflow(step, resolved: dict, state: CandidateState, ctx: Contex
 
 
 def _execute(step, resolved: dict, state: CandidateState, ctx: Context):
-    if step.executor == "python":
+    if step.kind == "python":
         raw = python_exec.call(ctx.steps_module, step.run, resolved)
-    elif step.executor == "workflow":
+    elif step.kind == "workflow":
         raw = _run_child_workflow(step, resolved, state, ctx)
         if raw is _WAIT:
             return _WAIT
-    else:
+    else:  # claude | agent
         template = (ctx.config.prompts_dir / step.prompt).read_text()
         prompt_text = rendering.render(template, resolved)
-        argv = render_agent_argv(ctx.config.agent_command, step.model, step.allowed_tools)
+        if step.kind == "claude":
+            argv = claude_exec.build_argv(step.model, step.allowed_tools)
+        else:
+            if ctx.config.agent_command is None:
+                raise RuntimeError(
+                    f"step {step.id}: kind `agent` requires `agent_command` in config.yml "
+                    "(use `kind: claude` for the Claude Code CLI)"
+                )
+            argv = render_agent_argv(ctx.config.agent_command, step.model, step.allowed_tools)
         raw = agent_exec.execute(ctx.run_command, argv, prompt_text)
     return outputs.validate(raw, step.outputs, step.id)
 

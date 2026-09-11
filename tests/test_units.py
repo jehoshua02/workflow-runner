@@ -12,7 +12,7 @@ VALID_YAML = """
 workflow: demo
 steps:
   - id: triage
-    executor: agent
+    kind: claude
     prompt: triage.md
     model: test-model
     allowed_tools: [Read, Grep]
@@ -26,7 +26,7 @@ steps:
       ALIVE: done
       UNCLEAR: halt
   - id: prepare
-    executor: python
+    kind: python
     run: steps.prepare
     inputs: [candidate.fqn, triage.evidence]
     outputs:
@@ -90,7 +90,7 @@ PARENT_YAML = """
 workflow: parent
 steps:
   - id: sub
-    executor: workflow
+    kind: workflow
     run: demo
     inputs: [candidate.fqn]
     outputs:
@@ -293,7 +293,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.max_step_visits, 3)
         self.assertEqual(cfg.max_depth, 5)
         self.assertIsNone(cfg.on_event)
-        self.assertEqual(cfg.agent_command[0], "claude")
+        self.assertIsNone(cfg.agent_command)  # generic agents opt in; claude is built in
 
     def test_overrides(self):
         cfg = load_config(
@@ -311,6 +311,14 @@ class TestConfig(unittest.TestCase):
     def test_bad_on_event(self):
         with self.assertRaises(ConfigError):
             load_config(Path("/proj/workflow"), {"on_event": "notify"})
+
+    def test_claude_argv_is_built_in(self):
+        from runner.executors.claude_exec import build_argv
+
+        argv = build_argv("claude-opus-4-6", ("Read", "Grep"))
+        self.assertEqual(argv[:2], ["claude", "-p"])
+        self.assertIn("--allowedTools", argv)
+        self.assertIn("Read,Grep", argv)
 
     def test_render_agent_argv(self):
         argv = render_agent_argv(

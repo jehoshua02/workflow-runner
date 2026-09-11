@@ -40,7 +40,16 @@ def _load(args) -> tuple:
     texts = {p.stem: p.read_text() for p in sorted(config.workflows_dir.glob("*.yaml"))}
     if not texts:
         raise SystemExit(f"no workflows in {config.workflows_dir}")
-    return config, load_registry(texts)
+    registry = load_registry(texts)
+    if config.agent_command is None:
+        for wf in registry.values():
+            for step in wf.steps.values():
+                if step.kind == "agent":
+                    raise SystemExit(
+                        f"{wf.name}/{step.id}: kind `agent` requires `agent_command` in "
+                        "config.yml (use `kind: claude` for the Claude Code CLI)"
+                    )
+    return config, registry
 
 
 def _context(config, registry) -> engine.Context:
