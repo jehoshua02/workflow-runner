@@ -109,5 +109,6 @@ details[open] summary { margin-bottom: 6px; }
 .graph .edge { fill: none; stroke: var(--muted); stroke-width: 1.4; }
 .graph .edge.back { stroke-dasharray: 5 4; }
 .graph .arrowhead { fill: var(--muted); }
-.graph .edge-label { font-size: 10.5px; fill: var(--muted); font-family: var(--mono); }
+.graph .edge-label { font-size: 10.5px; fill: var(--muted); font-family: var(--mono);
+  paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 .graph a:hover rect { stroke: var(--accent); }

@@ -271,6 +271,40 @@ steps:
 """
 
 
+LOOP_WF2 = """
+workflow: loopy
+steps:
+  - id: a
+    kind: python
+    run: steps.a
+    inputs: [input.x]
+    outputs:
+      r: {enum: [AGAIN, NEXT, SKIP]}
+    route_on: r
+    route:
+      AGAIN: a
+      NEXT: b
+      SKIP: c
+  - id: b
+    kind: python
+    run: steps.b
+    inputs: [input.x]
+    outputs:
+      r: {enum: [OK, BAD, BACK]}
+    route_on: r
+    route:
+      OK: c
+      BAD: halt
+      BACK: a
+  - id: c
+    kind: python
+    run: steps.c
+    inputs: [input.x]
+    outputs:
+      m: str
+"""
+
+
 class TestGraph(unittest.TestCase):
     def test_layout_ranks_and_terminals(self):
         wf = load_registry({"loopy": LOOP_WF})["loopy"]
@@ -281,7 +315,23 @@ class TestGraph(unittest.TestCase):
         self.assertEqual(lay["nodes"]["halt"]["rank"], 2)
         self.assertEqual(lay["cols"], 3)
         self.assertEqual(lay["rows"], 2)
-        self.assertIn(("a", "a", "AGAIN"), lay["edges"])
+        self.assertIn(("a", "a", ["AGAIN"]), lay["edges"])
+        self.assertEqual(lay["back"], 1)
+
+    def test_parallel_edges_merge(self):
+        wf = load_registry({"greet": WF})["greet"]
+        edges = graph.merged_edges(wf)
+        self.assertEqual([e for e in edges if e[0] == "classify"], [("classify", "respond", ["GREETING"]), ("classify", "halt", ["OTHER"])])
+
+    def test_nodes_fit_canvas_and_same_column_is_vertical(self):
+        import re
+        wf = load_registry({"loopy": LOOP_WF2})["loopy"]
+        svg = graph.render_svg(wf, {}, {})
+        width = int(re.search(r"width='(\d+)'", svg).group(1))
+        xs = [int(x) for x in re.findall(r"<rect x='(\d+)'", svg)]
+        self.assertTrue(all(x + graph.NODE_W <= width for x in xs))
+        self.assertRegex(svg, r"<path class='edge' d='M[\d.]+,[\d.]+ L[\d.]+,[\d.]+'")  # b -> c vertical
+        self.assertEqual(svg.count("class='edge back'"), 2)  # a->a, b->a
 
     def test_implicit_done_edge_and_gate_step(self):
         wf = load_registry({"greet": WF})["greet"]
