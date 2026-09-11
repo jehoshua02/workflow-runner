@@ -23,13 +23,6 @@ def run_command_subprocess(argv: list, stdin_text: str) -> tuple:
     return (completed.returncode, completed.stdout)
 
 
-def build_argv(model: str, allowed_tools: tuple) -> list:
-    argv = ["claude", "-p", "--output-format", "json", "--model", model]
-    if allowed_tools:
-        argv += ["--allowedTools", ",".join(allowed_tools)]
-    return argv
-
-
 def _extract_json(text: str) -> dict:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -43,15 +36,16 @@ def _extract_json(text: str) -> dict:
 
 
 def parse_reply(stdout: str) -> dict:
-    """claude --output-format json wraps the reply: {"result": "<agent text>", ...}."""
+    """Accept either a wrapped reply ({"result": "<agent text>"}) or a bare JSON object."""
     envelope = json.loads(stdout)
-    if not isinstance(envelope, dict) or "result" not in envelope:
-        raise ValueError("missing result envelope")
-    return _extract_json(envelope["result"])
+    if isinstance(envelope, dict) and isinstance(envelope.get("result"), str):
+        return _extract_json(envelope["result"])
+    if isinstance(envelope, dict):
+        return envelope
+    raise ValueError("reply is neither a result envelope nor a JSON object")
 
 
-def execute(run_command, prompt_text: str, model: str, allowed_tools: tuple) -> dict:
-    argv = build_argv(model, allowed_tools)
+def execute(run_command, argv: list, prompt_text: str) -> dict:
     last_error = ""
     for attempt in (1, 2):
         code, stdout = run_command(argv, prompt_text)

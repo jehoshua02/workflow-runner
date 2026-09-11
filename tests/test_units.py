@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from runner import gates, inputs, outputs, rendering, state
+from runner.config import ConfigError, load_config, render_agent_argv
 from runner.executors import agent_exec, python_exec
 from runner.pipeline import PipelineError, load_pipeline
 
@@ -59,6 +60,11 @@ class TestPipeline(unittest.TestCase):
     def test_agent_step_requires_model(self):
         bad = VALID_YAML.replace("    model: test-model\n", "")
         with self.assertRaisesRegex(PipelineError, "requires `model`"):
+            load_pipeline(bad)
+
+    def test_agent_step_requires_allowed_tools(self):
+        bad = VALID_YAML.replace("    allowed_tools: [Read, Grep]\n", "")
+        with self.assertRaisesRegex(PipelineError, "allowed_tools"):
             load_pipeline(bad)
 
     def test_input_source_must_be_known(self):
@@ -205,29 +211,68 @@ def envelope(payload: dict) -> str:
     return json.dumps({"result": json.dumps(payload)})
 
 
+ARGV = ["fake-agent", "--model", "test-model"]
+
+
 class TestAgentExec(unittest.TestCase):
     def test_happy_path(self):
         run = fake_runner([(0, envelope({"verdict": "DEAD"}))])
-        out = agent_exec.execute(run, "prompt", "test-model", ("Read",))
+        out = agent_exec.execute(run, ARGV, "prompt")
         self.assertEqual(out, {"verdict": "DEAD"})
         argv, stdin_text = run.calls[0]
-        self.assertIn("--allowedTools", argv)
+        self.assertEqual(argv, ARGV)
         self.assertEqual(stdin_text, "prompt")
 
     def test_fenced_json_is_extracted(self):
         reply = json.dumps({"result": "```json\n{\"verdict\": \"DEAD\"}\n```"})
         run = fake_runner([(0, reply)])
-        self.assertEqual(agent_exec.execute(run, "p", "m", ()), {"verdict": "DEAD"})
+        self.assertEqual(agent_exec.execute(run, ARGV, "p"), {"verdict": "DEAD"})
+
+    def test_bare_json_reply_accepted(self):
+        run = fake_runner([(0, json.dumps({"verdict": "DEAD"}))])
+        self.assertEqual(agent_exec.execute(run, ARGV, "p"), {"verdict": "DEAD"})
 
     def test_retries_once_then_fails(self):
         run = fake_runner([(1, ""), (0, "not json")])
         with self.assertRaises(agent_exec.AgentFailure):
-            agent_exec.execute(run, "p", "m", ())
+            agent_exec.execute(run, ARGV, "p")
         self.assertEqual(len(run.calls), 2)
 
     def test_retry_then_success(self):
         run = fake_runner([(0, "garbage"), (0, envelope({"verdict": "ALIVE"}))])
-        self.assertEqual(agent_exec.execute(run, "p", "m", ()), {"verdict": "ALIVE"})
+        self.assertEqual(agent_exec.execute(run, ARGV, "p"), {"verdict": "ALIVE"})
+
+
+class TestConfig(unittest.TestCase):
+    def test_defaults_resolve_under_project_workflow_dir(self):
+        cfg = load_config(Path("/proj"), {})
+        self.assertEqual(cfg.state_dir, Path("/proj/.workflow/state"))
+        self.assertEqual(cfg.inbox_dir, Path("/proj/.workflow/inbox"))
+        self.assertEqual(cfg.runs_dir, Path("/proj/.workflow/runs"))
+        self.assertEqual(cfg.log_path, Path("/proj/.workflow/log.jsonl"))
+        self.assertEqual(cfg.max_step_visits, 3)
+        self.assertEqual(cfg.agent_command[0], "claude")
+
+    def test_overrides(self):
+        cfg = load_config(
+            Path("/proj"),
+            {"inbox_dir": "../inbox", "max_step_visits": 5, "agent_command": ["my-agent"]},
+        )
+        self.assertEqual(cfg.inbox_dir, Path("/inbox"))
+        self.assertEqual(cfg.max_step_visits, 5)
+        self.assertEqual(cfg.agent_command, ("my-agent",))
+
+    def test_bad_max_visits(self):
+        with self.assertRaises(ConfigError):
+            load_config(Path("/proj"), {"max_step_visits": 0})
+
+    def test_render_agent_argv(self):
+        argv = render_agent_argv(
+            ("claude", "-p", "--model", "{model}", "--allowedTools", "{allowed_tools}"),
+            "m1",
+            ("Read", "Grep"),
+        )
+        self.assertEqual(argv, ["claude", "-p", "--model", "m1", "--allowedTools", "Read,Grep"])
 
 
 if __name__ == "__main__":

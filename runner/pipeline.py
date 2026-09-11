@@ -71,6 +71,13 @@ def _build_step(raw: dict) -> Step:
         all(isinstance(t, str) for t in allowed_tools),
         f"step {step_id}: allowed_tools must be strings",
     )
+    if executor == "agent":
+        # containment before autonomy: an agent step without an explicit tool
+        # allowlist is uncontained and therefore invalid
+        _require(
+            len(allowed_tools) > 0,
+            f"step {step_id}: agent step requires a non-empty allowed_tools list",
+        )
 
     inputs = tuple(raw.get("inputs", ()))
     outputs = raw.get("outputs", {})

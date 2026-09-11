@@ -22,16 +22,34 @@ runner/            — the engine (this repo, project-agnostic)
 
 ## 2. Usage
 
-```
-python3 -m venv .venv && .venv/bin/pip install pyyaml
-.venv/bin/python -m unittest discover -s tests
+docker-compose style: run from the project directory (the one holding
+`workflow.yaml`, `prompts/`, `steps.py`). Defaults resolve at this edge only;
+the engine itself has no defaults.
 
-.venv/bin/python -m runner.cli start --pipeline P.yaml --project-dir D \
-    --state-dir S --inbox-dir I --candidate-json c.json
-.venv/bin/python -m runner.cli tick --pipeline P.yaml --project-dir D \
-    --state-dir S --inbox-dir I
-.venv/bin/python -m runner.cli status --state-dir S
 ```
+cd <project>
+workflow-runner start --candidate-json c.json   # enqueue (refuses overwrite)
+workflow-runner tick                            # advance everything that can move
+workflow-runner watch --interval 60             # tick in a loop
+workflow-runner status                          # one line per candidate
+workflow-runner retry <candidate-id>            # HALTED -> RUNNING at the failed step
+```
+
+Working files (overridable in `config:`): state `./.workflow/state/`, gate/halt
+notes `./.workflow/inbox/`, per-step run records (inputs + outputs/error)
+`./.workflow/runs/<candidate>/NNN-<step>.json`, unified event log
+`./.workflow/log.jsonl`.
+
+```yaml
+config:
+  inbox_dir: ../inbox            # project decides where humans read gates
+  agent_command: [claude, -p, --output-format, json, --model, "{model}",
+                  --allowedTools, "{allowed_tools}"]
+  max_step_visits: 3             # loop guard: same step > N times -> halt
+```
+
+Dev: `python3 -m venv .venv && .venv/bin/pip install pyyaml`, tests via
+`.venv/bin/python -m unittest discover -s tests`.
 
 ## 3. Step schema
 
