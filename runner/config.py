@@ -7,7 +7,7 @@ Project layout convention (discovered from the project root):
       workflows/*.yaml  — one workflow per file, name == file stem
       prompts/          — agent prompt templates
       steps.py          — python step functions + optional on_event hook
-      .state/           — runner-owned: candidates/, runs/, decisions/, log.jsonl
+      .state/           — runner-owned: inputs/, runs/, decisions/, log.jsonl
 
 Defaults live HERE, at the edge — everything downstream (engine, executors)
 receives fully-resolved values and has no defaults of its own.
@@ -18,7 +18,7 @@ non-Claude runtime): an argv template, {model} and {allowed_tools}
 the Claude Code CLI invocation is built in.
 
 on_event names a function in steps.py (`steps.<name>`) called with one dict
-{"event", "candidate", "detail", "decision_path"} on gate_opened and halted —
+{"event", "input", "detail", "decision_path"} on gate_opened and halted —
 the project's bridge from engine decisions to wherever humans look.
 """
 from dataclasses import dataclass
@@ -37,7 +37,7 @@ class RunnerConfig:
     workflow_dir: Path
     workflows_dir: Path
     prompts_dir: Path
-    candidates_dir: Path
+    inputs_dir: Path
     runs_dir: Path
     decisions_dir: Path
     log_path: Path
@@ -76,7 +76,7 @@ def load_config(workflow_dir: Path, raw: dict) -> RunnerConfig:
         workflow_dir=workflow_dir,
         workflows_dir=workflow_dir / "workflows",
         prompts_dir=workflow_dir / "prompts",
-        candidates_dir=state / "candidates",
+        inputs_dir=state / "inputs",
         runs_dir=state / "runs",
         decisions_dir=state / "decisions",
         log_path=state / "log.jsonl",

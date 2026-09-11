@@ -9,7 +9,7 @@ project-configured `agent_command`. Agents never move
 workflow state — the runner routes on their declared outputs. Human
 approvals are decision files: the runner halts and resumes on an
 `approved` / `rejected: <reason>` reply. Any unexpected state halts the
-candidate with a decision file; the runner never improvises. Workflows
+input with a decision file; the runner never improvises. Workflows
 compose: a step can run a child workflow.
 
 ## 1. Project layout
@@ -22,11 +22,11 @@ compose: a step can run a child workflow.
   steps.py          — python step functions fn(inputs: dict) -> dict,
                       plus the optional on_event(event: dict) hook
   .state/           — runner-owned:
-    candidates/     — one JSON per candidate (children: <parent>.<step>.json)
-    runs/           — per-step run records: <candidate>/NNN-<step>.json
+    inputs/     — one JSON per input (children: <parent>.<step>.json)
+    runs/           — per-step run records: <input>/NNN-<step>.json
                       (inputs + outputs/error + timestamps)
     decisions/      — decision files awaiting a human reply
-    log.jsonl       — unified event log across all candidates
+    log.jsonl       — unified event log across all inputs
 ```
 
 The engine has no notion of inboxes, tickets, or chat — `on_event`
@@ -38,11 +38,11 @@ decision files to wherever its humans look.
 Run from the project root (the directory containing `workflow/`):
 
 ```
-workflow-runner start <workflow> --candidate-json c.json
+workflow-runner start <workflow> --input-json c.json
 workflow-runner tick                    # run once: advance everything that can move
 workflow-runner tick --loop --interval 60
-workflow-runner status                  # tree: candidates + child workflows
-workflow-runner retry <candidate-id>    # HALTED -> RUNNING at the failed step
+workflow-runner status                  # tree: inputs + child workflows
+workflow-runner retry <input-id>    # HALTED -> RUNNING at the failed step
 ```
 
 Defaults resolve only at this edge (CLI + config.yml); the engine requires
@@ -58,7 +58,7 @@ steps:
     prompt: triage.md            # claude/agent: file in prompts/
     model: <model-id>            # claude/agent: required
     allowed_tools: [Read, Grep]  # claude/agent: required — containment before autonomy
-    inputs: [candidate.fqn, other_step.field]   # dotted, explicit, no ambient state
+    inputs: [input.fqn, other_step.field]   # dotted, explicit, no ambient state
     outputs:
       verdict: {enum: [DEAD, ALIVE, UNCLEAR]}
       evidence: text             # text|str, int, list
@@ -77,13 +77,13 @@ steps:
   - id: publish
     kind: workflow           # composition: runs a child workflow
     run: publish-flow            # workflows/publish-flow.yaml
-    inputs: [next_step.branch]   # become the child's candidate fields (last segment)
+    inputs: [next_step.branch]   # become the child's input fields (last segment)
     outputs: {pr_url: str}       # must be covered by the child's `returns`
 returns:                         # what this workflow exposes to a parent
   branch: next_step.branch
 ```
 
-Composition semantics: the child runs as its own candidate
+Composition semantics: the child runs as its own input
 (`<parent>.<step>`), with its own state, runs, and decisions. Child DONE →
 its `returns` become the step's outputs; child waiting on a decision →
 parent waits; child HALTED → parent halts. Depth bounded by
@@ -94,7 +94,7 @@ parent waits; child HALTED → parent halts. Depth bounded by
 
 - No optional arguments, no defaults below the edge — everything explicit.
 - Typed I/O: outputs validated against the declared spec; an unparseable
-  agent reply gets one retry, then the candidate halts.
+  agent reply gets one retry, then the input halts.
 - One responsibility per module: workflow (read), state (read/write),
   inputs/outputs/rendering/decisions (calculate), engine (orchestrate).
 

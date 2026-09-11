@@ -1,6 +1,6 @@
 """Human decisions: the engine's only human-interaction concept.
 
-When a gate needs approval or a candidate halts, the engine writes a decision
+When a gate needs approval or a input halts, the engine writes a decision
 file under its own state area (`.state/decisions/`). How a human finds out —
 an inbox note, a DM, a ticket — is the project layer's job, via the optional
 `on_event` hook in steps.py. The engine knows nothing about inboxes.
@@ -25,8 +25,8 @@ NOTE_TEMPLATE = """# {title}
 """
 
 
-def decision_path(decisions_dir: Path, candidate_id: str, gate: str) -> Path:
-    return decisions_dir / f"{candidate_id}-{gate}.md"
+def decision_path(decisions_dir: Path, input_id: str, gate: str) -> Path:
+    return decisions_dir / f"{input_id}-{gate}.md"
 
 
 def write_decision(path: Path, title: str, link: str, ask: str, now: str) -> None:

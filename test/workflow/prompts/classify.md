@@ -1,4 +1,4 @@
-Classify the word "{{candidate.word}}".
+Classify the word "{{input.word}}".
 
 If it is a greeting in any language (hello, hi, hola, bonjour, ...), kind is GREETING. Otherwise kind is OTHER.
 

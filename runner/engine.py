@@ -1,12 +1,12 @@
-"""The engine: advance one candidate through its workflow until it blocks.
+"""The engine: advance one input through its workflow until it blocks.
 
-A tick runs steps until the candidate is DONE, HALTED, or WAITING_DECISION.
+A tick runs steps until the input is DONE, HALTED, or WAITING_DECISION.
 Gates and failures write a decision file under the runner's own state area
 and fire the project's optional on_event hook — the engine never improvises
 and knows nothing about inboxes. Subagents never move workflow state: the
 engine routes on their declared outputs.
 
-Composition: `kind: workflow` runs a child workflow as its own candidate
+Composition: `kind: workflow` runs a child workflow as its own input
 (id `<parent>.<step>`), recursively. Child DONE → its `returns` become the
 step's outputs; child WAITING_DECISION propagates; child HALTED halts the
 parent. Depth is bounded by config.max_depth.
@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from . import decisions, inputs, outputs, rendering, runlog, state as state_mod
 from .config import RunnerConfig, render_agent_argv
 from .executors import agent_exec, claude_exec, python_exec
-from .state import CandidateState, record
+from .state import InputState, record
 
 _WAIT = object()  # sentinel: child workflow is waiting on a human decision
 
@@ -37,7 +37,7 @@ class Context:
     clock: object  # callable() -> ISO timestamp string
 
 
-def _fire_hook(state: CandidateState, ctx: Context, event: str, detail: dict, path) -> None:
+def _fire_hook(state: InputState, ctx: Context, event: str, detail: dict, path) -> None:
     if ctx.config.on_event is None:
         return
     hook = getattr(ctx.steps_module, ctx.config.on_event.split(".", 1)[1], None)
@@ -46,7 +46,7 @@ def _fire_hook(state: CandidateState, ctx: Context, event: str, detail: dict, pa
     try:
         hook({
             "event": event,
-            "candidate": state.candidate["id"],
+            "input": state.input["id"],
             "detail": detail,
             "decision_path": str(path) if path else "",
         })
@@ -54,35 +54,35 @@ def _fire_hook(state: CandidateState, ctx: Context, event: str, detail: dict, pa
         pass  # hooks are best-effort notification, never control flow
 
 
-def _event(state: CandidateState, ctx: Context, event: str, detail: dict, now: str) -> None:
+def _event(state: InputState, ctx: Context, event: str, detail: dict, now: str) -> None:
     record(state, event, detail, now)
-    runlog.append_log(ctx.config.log_path, state.candidate["id"], event, detail, now)
+    runlog.append_log(ctx.config.log_path, state.input["id"], event, detail, now)
 
 
-def _halt(state: CandidateState, ctx: Context, reason: str, now: str) -> None:
+def _halt(state: InputState, ctx: Context, reason: str, now: str) -> None:
     state.status = "HALTED"
     _event(state, ctx, "halted", {"reason": reason}, now)
-    path = decisions.decision_path(ctx.config.decisions_dir, state.candidate["id"], "halted")
+    path = decisions.decision_path(ctx.config.decisions_dir, state.input["id"], "halted")
     decisions.write_decision(
         path,
-        title=f"HALTED: {state.candidate['id']} at {state.current_step}",
-        link=f"state: candidates/{state.candidate['id']}.json · runs: runs/{state.candidate['id']}/",
+        title=f"HALTED: {state.input['id']} at {state.current_step}",
+        link=f"state: inputs/{state.input['id']}.json · runs: runs/{state.input['id']}/",
         ask=reason,
         now=now,
     )
     _fire_hook(state, ctx, "halted", {"reason": reason}, path)
 
 
-def _check_gate(state: CandidateState, ctx: Context, gate_name: str, now: str) -> str:
-    path = decisions.decision_path(ctx.config.decisions_dir, state.candidate["id"], gate_name)
+def _check_gate(state: InputState, ctx: Context, gate_name: str, now: str) -> str:
+    path = decisions.decision_path(ctx.config.decisions_dir, state.input["id"], gate_name)
     decision, line = decisions.read_decision(path)
     if decision == "pending":
         if not path.exists():
             decisions.write_decision(
                 path,
-                title=f"Gate `{gate_name}`: {state.candidate['id']}",
-                link=f"state: candidates/{state.candidate['id']}.json",
-                ask=f"Approve `{state.current_step}` for {state.candidate['id']}? "
+                title=f"Gate `{gate_name}`: {state.input['id']}",
+                link=f"state: inputs/{state.input['id']}.json",
+                ask=f"Approve `{state.current_step}` for {state.input['id']}? "
                 "Reply `approved` or `rejected: <reason>` below.",
                 now=now,
             )
@@ -97,7 +97,7 @@ def _check_gate(state: CandidateState, ctx: Context, gate_name: str, now: str) -
     return "go"
 
 
-def _visits(state: CandidateState, step_id: str) -> int:
+def _visits(state: InputState, step_id: str) -> int:
     return sum(
         1
         for entry in state.history
@@ -105,24 +105,24 @@ def _visits(state: CandidateState, step_id: str) -> int:
     )
 
 
-def _run_child_workflow(step, resolved: dict, state: CandidateState, ctx: Context):
-    child_id = f"{state.candidate['id']}.{step.id}"
+def _run_child_workflow(step, resolved: dict, state: InputState, ctx: Context):
+    child_id = f"{state.input['id']}.{step.id}"
     if child_id.count(".") >= ctx.config.max_depth:
         raise ChildHalted(f"max workflow depth {ctx.config.max_depth} exceeded at {child_id}")
     child_wf = ctx.workflows[step.run]
-    path = state_mod.state_path(ctx.config.candidates_dir, child_id)
+    path = state_mod.state_path(ctx.config.inputs_dir, child_id)
     if path.exists():
         child = state_mod.load_state(path)
         if child.status == "WAITING_DECISION":
             child.status = "RUNNING"  # re-enter; gates re-check and re-wait if pending
     else:
-        candidate = {"id": child_id}
+        input = {"id": child_id}
         for ref, value in resolved.items():
-            candidate[ref.split(".", 1)[1]] = value
-        child = state_mod.new_state(candidate, step.run, child_wf.first_step)
+            input[ref.split(".", 1)[1]] = value
+        child = state_mod.new_state(input, step.run, child_wf.first_step)
     if child.status == "RUNNING":
-        child = tick_candidate(child_wf, child, ctx)
-    ctx.config.candidates_dir.mkdir(parents=True, exist_ok=True)
+        child = tick_input(child_wf, child, ctx)
+    ctx.config.inputs_dir.mkdir(parents=True, exist_ok=True)
     state_mod.save_state(path, child)
     if child.status == "WAITING_DECISION":
         return _WAIT
@@ -132,7 +132,7 @@ def _run_child_workflow(step, resolved: dict, state: CandidateState, ctx: Contex
             for name, ref in child_wf.returns.items()}
 
 
-def _execute(step, resolved: dict, state: CandidateState, ctx: Context):
+def _execute(step, resolved: dict, state: InputState, ctx: Context):
     if step.kind == "python":
         raw = python_exec.call(ctx.steps_module, step.run, resolved)
     elif step.kind == "workflow":
@@ -155,7 +155,7 @@ def _execute(step, resolved: dict, state: CandidateState, ctx: Context):
     return outputs.validate(raw, step.outputs, step.id)
 
 
-def tick_candidate(workflow, state: CandidateState, ctx: Context) -> CandidateState:
+def tick_input(workflow, state: InputState, ctx: Context) -> InputState:
     while state.status == "RUNNING":
         now = ctx.clock()
         step = workflow.steps[state.current_step]
@@ -174,7 +174,7 @@ def tick_candidate(workflow, state: CandidateState, ctx: Context) -> CandidateSt
                 return state
 
         try:
-            resolved = inputs.resolve(step.inputs, state.candidate, state.outputs)
+            resolved = inputs.resolve(step.inputs, state.input, state.outputs)
         except Exception as exc:
             _halt(state, ctx, f"step {step.id} inputs unresolvable: {exc}", now)
             return state
@@ -183,7 +183,7 @@ def tick_candidate(workflow, state: CandidateState, ctx: Context) -> CandidateSt
             step_outputs = _execute(step, resolved, state, ctx)
         except Exception as exc:  # any unexpected state → halt + decision file, never improvise
             runlog.write_run_record(
-                ctx.config.runs_dir, state.candidate["id"], step.id,
+                ctx.config.runs_dir, state.input["id"], step.id,
                 resolved, {"error": str(exc)}, now, ctx.clock(),
             )
             _halt(state, ctx, f"step {step.id} failed: {exc}", now)
@@ -195,7 +195,7 @@ def tick_candidate(workflow, state: CandidateState, ctx: Context) -> CandidateSt
             return state
 
         runlog.write_run_record(
-            ctx.config.runs_dir, state.candidate["id"], step.id,
+            ctx.config.runs_dir, state.input["id"], step.id,
             resolved, {"outputs": step_outputs}, now, ctx.clock(),
         )
         state.outputs[step.id] = step_outputs

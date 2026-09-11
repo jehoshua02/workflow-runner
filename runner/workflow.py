@@ -170,11 +170,11 @@ def load_workflow(text: str) -> Workflow:
         for ref in step.inputs:
             _require(
                 "." in ref,
-                f"step {step.id}: input `{ref}` must be dotted (`candidate.x` or `<step>.<output>`)",
+                f"step {step.id}: input `{ref}` must be dotted (`input.x` or `<step>.<output>`)",
             )
             source = ref.split(".", 1)[0]
             _require(
-                source == "candidate" or source in steps,
+                source == "input" or source in steps,
                 f"step {step.id}: input `{ref}` references unknown source `{source}`",
             )
 
