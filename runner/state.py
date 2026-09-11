@@ -16,17 +16,19 @@ class StateError(ValueError):
 @dataclass
 class CandidateState:
     candidate: dict
+    workflow: str
     status: str
     current_step: str
     outputs: dict
     history: list
 
 
-def new_state(candidate: dict, first_step: str) -> CandidateState:
+def new_state(candidate: dict, workflow: str, first_step: str) -> CandidateState:
     if not isinstance(candidate, dict) or not candidate.get("id"):
         raise StateError("candidate must be a mapping with a non-empty `id`")
     return CandidateState(
         candidate=candidate,
+        workflow=workflow,
         status="RUNNING",
         current_step=first_step,
         outputs={},
@@ -40,7 +42,7 @@ def state_path(state_dir: Path, candidate_id: str) -> Path:
 
 def load_state(path: Path) -> CandidateState:
     raw = json.loads(path.read_text())
-    missing = {"candidate", "status", "current_step", "outputs", "history"} - set(raw)
+    missing = {"candidate", "workflow", "status", "current_step", "outputs", "history"} - set(raw)
     if missing:
         raise StateError(f"state file {path} missing fields: {sorted(missing)}")
     return CandidateState(**raw)

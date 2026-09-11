@@ -1,8 +1,13 @@
-"""Human-approval gates: halt on a templated inbox note, resume on a marker.
+"""Human decisions: the engine's only human-interaction concept.
 
-A gate note asks one question. The recipient answers in the `## Response`
+When a gate needs approval or a candidate halts, the engine writes a decision
+file under its own state area (`.state/decisions/`). How a human finds out —
+an inbox note, a DM, a ticket — is the project layer's job, via the optional
+`on_event` hook in steps.py. The engine knows nothing about inboxes.
+
+A decision file asks one question. The answer goes in the `## Response`
 section: a line starting with `approved` or `rejected` (case-insensitive).
-Anything else means the gate is still pending.
+Anything else means the decision is still pending.
 """
 from pathlib import Path
 
@@ -20,15 +25,16 @@ NOTE_TEMPLATE = """# {title}
 """
 
 
-def gate_note_path(inbox_dir: Path, candidate_id: str, gate: str) -> Path:
-    return inbox_dir / f"{candidate_id}-{gate}.md"
+def decision_path(decisions_dir: Path, candidate_id: str, gate: str) -> Path:
+    return decisions_dir / f"{candidate_id}-{gate}.md"
 
 
-def write_gate_note(path: Path, title: str, link: str, ask: str, now: str) -> None:
+def write_decision(path: Path, title: str, link: str, ask: str, now: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(NOTE_TEMPLATE.format(title=title, link=link, ask=ask, now=now))
 
 
-def read_gate_decision(path: Path) -> tuple:
+def read_decision(path: Path) -> tuple:
     """Return ("pending", ""), ("approved", <line>), or ("rejected", <line>)."""
     if not path.exists():
         return ("pending", "")

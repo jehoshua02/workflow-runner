@@ -1,19 +1,16 @@
-"""CLI — docker-compose style: run from the project directory.
+"""CLI — docker-compose style: run from the project root.
 
 Discovery (defaults live here, at the edge; the engine requires everything):
-- workflow file: ./workflow.yaml            (override: --file)
-- project dir:   cwd                        (override: --project-dir)
-- state:         ./.workflow/state/         (override: config.state_dir)
-- inbox:         ./.workflow/inbox/         (override: config.inbox_dir)
-- runs:          ./.workflow/runs/          (override: config.runs_dir)
-- log:           ./.workflow/log.jsonl      (override: config.log_path)
+- workflow home:  ./workflow/                (override: --workflow-dir)
+- config:         ./workflow/config.yml      (optional)
+- workflows:      ./workflow/workflows/*.yaml (name == file stem)
+- runtime state:  ./workflow/.state/{candidates,runs,decisions,log.jsonl}
 
 Commands:
-  workflow-runner start --candidate-json c.json   enqueue a candidate
-  workflow-runner tick                            advance everything that can move
-  workflow-runner watch [--interval 60]           tick in a loop
-  workflow-runner status                          one line per candidate
-  workflow-runner retry <candidate-id>            HALTED -> RUNNING at the failed step
+  workflow-runner start <workflow> --candidate-json c.json   enqueue a candidate
+  workflow-runner tick [--loop] [--interval 60]              run once; --loop runs forever
+  workflow-runner status                                     one line per candidate
+  workflow-runner retry <candidate-id>                       HALTED -> RUNNING at failed step
 """
 import argparse
 import json
@@ -26,7 +23,7 @@ import yaml
 from . import engine, state
 from .config import load_config
 from .executors import agent_exec, python_exec
-from .pipeline import load_pipeline
+from .workflow import load_registry
 
 
 def _clock() -> str:
@@ -34,79 +31,91 @@ def _clock() -> str:
 
 
 def _load(args) -> tuple:
-    project_dir = Path(args.project_dir).resolve()
-    workflow_path = project_dir / args.file
-    if not workflow_path.exists():
-        raise SystemExit(f"no {args.file} in {project_dir}")
-    text = workflow_path.read_text()
-    pipeline = load_pipeline(text)
-    config = load_config(project_dir, yaml.safe_load(text).get("config", {}))
-    return pipeline, config
+    workflow_dir = Path(args.workflow_dir).resolve()
+    if not workflow_dir.is_dir():
+        raise SystemExit(f"no workflow/ directory at {workflow_dir}")
+    config_path = workflow_dir / "config.yml"
+    raw_config = yaml.safe_load(config_path.read_text()) if config_path.exists() else {}
+    config = load_config(workflow_dir, raw_config or {})
+    texts = {p.stem: p.read_text() for p in sorted(config.workflows_dir.glob("*.yaml"))}
+    if not texts:
+        raise SystemExit(f"no workflows in {config.workflows_dir}")
+    return config, load_registry(texts)
 
 
-def _context(config, project_dir: Path) -> engine.Context:
+def _context(config, registry) -> engine.Context:
     return engine.Context(
         config=config,
-        steps_module=python_exec.load_steps_module(project_dir),
-        prompts_dir=project_dir / "prompts",
+        workflows=registry,
+        steps_module=python_exec.load_steps_module(config.workflow_dir),
         run_command=agent_exec.run_command_subprocess,
         clock=_clock,
     )
 
 
 def cmd_start(args) -> None:
-    pipeline, config = _load(args)
+    config, registry = _load(args)
+    if args.workflow not in registry:
+        raise SystemExit(f"unknown workflow `{args.workflow}` — have: {sorted(registry)}")
+    workflow = registry[args.workflow]
     candidate = json.loads(Path(args.candidate_json).read_text())
-    s = state.new_state(candidate, pipeline.first_step)
-    config.state_dir.mkdir(parents=True, exist_ok=True)
-    path = state.state_path(config.state_dir, candidate["id"])
+    s = state.new_state(candidate, args.workflow, workflow.first_step)
+    config.candidates_dir.mkdir(parents=True, exist_ok=True)
+    path = state.state_path(config.candidates_dir, candidate["id"])
     if path.exists():
         raise SystemExit(f"refusing to overwrite existing state: {path}")
     state.save_state(path, s)
-    print(f"started {candidate['id']} at {pipeline.first_step}")
+    print(f"started {candidate['id']} on `{args.workflow}` at {workflow.first_step}")
 
 
-def _tick_once(args) -> list:
-    pipeline, config = _load(args)
-    ctx = _context(config, config.project_dir)
+def _is_child(candidate_id: str) -> bool:
+    return "." in candidate_id
+
+
+def _tick_once(config, registry) -> list:
+    ctx = _context(config, registry)
     moved = []
-    for path in sorted(config.state_dir.glob("*.json")) if config.state_dir.exists() else []:
+    paths = sorted(config.candidates_dir.glob("*.json")) if config.candidates_dir.exists() else []
+    for path in paths:
         s = state.load_state(path)
-        if s.status == "WAITING_GATE":
-            s.status = "RUNNING"  # re-enter; the gate re-checks and re-waits if still pending
+        if _is_child(s.candidate["id"]):
+            continue  # children are ticked by their parent step
+        if s.status == "WAITING_DECISION":
+            s.status = "RUNNING"  # re-enter; gates re-check and re-wait if still pending
         if s.status != "RUNNING":
             continue
-        s = engine.tick_candidate(pipeline, s, ctx)
+        s = engine.tick_candidate(registry[s.workflow], s, ctx)
         state.save_state(path, s)
-        moved.append(f"{s.candidate['id']}: {s.status} @ {s.current_step}")
+        moved.append(f"{s.candidate['id']} [{s.workflow}]: {s.status} @ {s.current_step}")
     return moved
 
 
 def cmd_tick(args) -> None:
-    lines = _tick_once(args)
-    print("\n".join(lines) if lines else "nothing to move")
-
-
-def cmd_watch(args) -> None:
+    config, registry = _load(args)
     while True:
-        for line in _tick_once(args):
+        lines = _tick_once(config, registry)
+        if not args.loop:
+            print("\n".join(lines) if lines else "nothing to move")
+            return
+        for line in lines:
             print(f"{_clock()} {line}", flush=True)
         time.sleep(args.interval)
 
 
 def cmd_status(args) -> None:
-    _, config = _load(args)
-    paths = sorted(config.state_dir.glob("*.json")) if config.state_dir.exists() else []
+    config, _ = _load(args)
+    paths = sorted(config.candidates_dir.glob("*.json")) if config.candidates_dir.exists() else []
     if not paths:
         print("no candidates")
     for path in paths:
         s = state.load_state(path)
-        print(f"{s.candidate['id']}: {s.status} @ {s.current_step}")
+        indent = "  " * s.candidate["id"].count(".")
+        print(f"{indent}{s.candidate['id']} [{s.workflow}]: {s.status} @ {s.current_step}")
 
 
 def cmd_retry(args) -> None:
-    _, config = _load(args)
-    path = state.state_path(config.state_dir, args.candidate_id)
+    config, _ = _load(args)
+    path = state.state_path(config.candidates_dir, args.candidate_id)
     if not path.exists():
         raise SystemExit(f"no state for {args.candidate_id}")
     s = state.load_state(path)
@@ -120,19 +129,18 @@ def cmd_retry(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="workflow-runner")
-    parser.add_argument("--file", default="workflow.yaml")
-    parser.add_argument("--project-dir", default=".")
+    parser.add_argument("--workflow-dir", default="workflow")
     sub = parser.add_subparsers(dest="command", required=True)
 
     start = sub.add_parser("start")
+    start.add_argument("workflow")
     start.add_argument("--candidate-json", required=True)
     start.set_defaults(func=cmd_start)
 
-    sub.add_parser("tick").set_defaults(func=cmd_tick)
-
-    watch = sub.add_parser("watch")
-    watch.add_argument("--interval", type=int, default=60)
-    watch.set_defaults(func=cmd_watch)
+    tick = sub.add_parser("tick")
+    tick.add_argument("--loop", action="store_true")
+    tick.add_argument("--interval", type=int, default=60)
+    tick.set_defaults(func=cmd_tick)
 
     sub.add_parser("status").set_defaults(func=cmd_status)
 

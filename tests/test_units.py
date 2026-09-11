@@ -3,13 +3,13 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from runner import gates, inputs, outputs, rendering, state
+from runner import decisions, inputs, outputs, rendering, state
 from runner.config import ConfigError, load_config, render_agent_argv
 from runner.executors import agent_exec, python_exec
-from runner.pipeline import PipelineError, load_pipeline
+from runner.workflow import WorkflowError, load_registry, load_workflow
 
 VALID_YAML = """
-pipeline: demo
+workflow: demo
 steps:
   - id: triage
     executor: agent
@@ -24,7 +24,7 @@ steps:
     route:
       DEAD: prepare
       ALIVE: done
-      UNCLEAR: halt_inbox
+      UNCLEAR: halt
   - id: prepare
     executor: python
     run: steps.prepare
@@ -32,65 +32,104 @@ steps:
     outputs:
       branch: str
     gate: merge-approval
+returns:
+  branch: prepare.branch
 """
 
 
-class TestPipeline(unittest.TestCase):
-    def test_valid_pipeline_loads(self):
-        p = load_pipeline(VALID_YAML)
-        self.assertEqual(p.name, "demo")
-        self.assertEqual(p.first_step, "triage")
-        self.assertEqual(p.steps["prepare"].gate, "merge-approval")
+class TestWorkflow(unittest.TestCase):
+    def test_valid_workflow_loads(self):
+        wf = load_workflow(VALID_YAML)
+        self.assertEqual(wf.name, "demo")
+        self.assertEqual(wf.first_step, "triage")
+        self.assertEqual(wf.steps["prepare"].gate, "merge-approval")
+        self.assertEqual(wf.returns, {"branch": "prepare.branch"})
 
     def test_route_target_must_exist(self):
         bad = VALID_YAML.replace("DEAD: prepare", "DEAD: nonexistent")
-        with self.assertRaisesRegex(PipelineError, "nonexistent"):
-            load_pipeline(bad)
+        with self.assertRaisesRegex(WorkflowError, "nonexistent"):
+            load_workflow(bad)
 
     def test_route_must_cover_enum(self):
-        bad = VALID_YAML.replace("      UNCLEAR: halt_inbox\n", "")
-        with self.assertRaisesRegex(PipelineError, "UNCLEAR"):
-            load_pipeline(bad)
+        bad = VALID_YAML.replace("      UNCLEAR: halt\n", "")
+        with self.assertRaisesRegex(WorkflowError, "UNCLEAR"):
+            load_workflow(bad)
 
     def test_python_step_requires_run(self):
         bad = VALID_YAML.replace("    run: steps.prepare\n", "")
-        with self.assertRaisesRegex(PipelineError, "requires `run`"):
-            load_pipeline(bad)
+        with self.assertRaisesRegex(WorkflowError, "requires `run`"):
+            load_workflow(bad)
 
     def test_agent_step_requires_model(self):
         bad = VALID_YAML.replace("    model: test-model\n", "")
-        with self.assertRaisesRegex(PipelineError, "requires `model`"):
-            load_pipeline(bad)
+        with self.assertRaisesRegex(WorkflowError, "requires `model`"):
+            load_workflow(bad)
 
     def test_agent_step_requires_allowed_tools(self):
         bad = VALID_YAML.replace("    allowed_tools: [Read, Grep]\n", "")
-        with self.assertRaisesRegex(PipelineError, "allowed_tools"):
-            load_pipeline(bad)
+        with self.assertRaisesRegex(WorkflowError, "allowed_tools"):
+            load_workflow(bad)
 
     def test_input_source_must_be_known(self):
         bad = VALID_YAML.replace("triage.evidence", "ghost.evidence")
-        with self.assertRaisesRegex(PipelineError, "ghost"):
-            load_pipeline(bad)
+        with self.assertRaisesRegex(WorkflowError, "ghost"):
+            load_workflow(bad)
 
     def test_route_on_must_be_declared_output(self):
         bad = VALID_YAML.replace("route_on: verdict", "route_on: mood")
-        with self.assertRaisesRegex(PipelineError, "mood"):
-            load_pipeline(bad)
+        with self.assertRaisesRegex(WorkflowError, "mood"):
+            load_workflow(bad)
+
+    def test_returns_must_reference_real_outputs(self):
+        bad = VALID_YAML.replace("branch: prepare.branch", "branch: prepare.nope")
+        with self.assertRaisesRegex(WorkflowError, "nope"):
+            load_workflow(bad)
+
+
+PARENT_YAML = """
+workflow: parent
+steps:
+  - id: sub
+    executor: workflow
+    run: demo
+    inputs: [candidate.fqn]
+    outputs:
+      branch: str
+"""
+
+
+class TestRegistry(unittest.TestCase):
+    def test_composition_validates(self):
+        registry = load_registry({"demo": VALID_YAML, "parent": PARENT_YAML})
+        self.assertEqual(set(registry), {"demo", "parent"})
+
+    def test_missing_child_workflow(self):
+        with self.assertRaisesRegex(WorkflowError, "not found"):
+            load_registry({"parent": PARENT_YAML})
+
+    def test_child_must_return_declared_outputs(self):
+        parent = PARENT_YAML.replace("branch: str", "pr_url: str")
+        with self.assertRaisesRegex(WorkflowError, "pr_url"):
+            load_registry({"demo": VALID_YAML, "parent": parent})
+
+    def test_name_must_match_file_stem(self):
+        with self.assertRaisesRegex(WorkflowError, "match"):
+            load_registry({"other": VALID_YAML})
 
 
 class TestState(unittest.TestCase):
     def test_roundtrip(self):
         with TemporaryDirectory() as tmp:
-            s = state.new_state({"id": "cand-1", "fqn": "A::b"}, "triage")
+            s = state.new_state({"id": "cand-1", "fqn": "A::b"}, "demo", "triage")
             path = state.state_path(Path(tmp), "cand-1")
             state.save_state(path, s)
             loaded = state.load_state(path)
             self.assertEqual(loaded, s)
-            self.assertFalse(path.with_suffix(".json.tmp").exists())
+            self.assertEqual(loaded.workflow, "demo")
 
     def test_candidate_requires_id(self):
         with self.assertRaises(state.StateError):
-            state.new_state({"fqn": "A::b"}, "triage")
+            state.new_state({"fqn": "A::b"}, "demo", "triage")
 
 
 class TestRendering(unittest.TestCase):
@@ -138,36 +177,36 @@ class TestOutputs(unittest.TestCase):
             outputs.validate({"verdict": "DEAD", "evidence": "x", "count": True}, self.SPEC, "s")
 
 
-class TestGates(unittest.TestCase):
+class TestDecisions(unittest.TestCase):
     def _note(self, tmp: Path, response: str) -> Path:
-        path = gates.gate_note_path(tmp, "cand-1", "merge-approval")
-        gates.write_gate_note(path, "t", "l", "ask?", "2026-09-11 15:00 MDT")
+        path = decisions.decision_path(tmp, "cand-1", "merge-approval")
+        decisions.write_decision(path, "t", "l", "ask?", "2026-09-11 15:00 MDT")
         with path.open("a") as fh:
             fh.write(response)
         return path
 
     def test_missing_note_is_pending(self):
-        self.assertEqual(gates.read_gate_decision(Path("/nonexistent-note.md")), ("pending", ""))
+        self.assertEqual(decisions.read_decision(Path("/nonexistent-note.md")), ("pending", ""))
 
     def test_empty_response_is_pending(self):
         with TemporaryDirectory() as tmp:
-            self.assertEqual(self._note(Path(tmp), "")
-                             and gates.read_gate_decision(self._note(Path(tmp), ""))[0], "pending")
+            decision, _ = decisions.read_decision(self._note(Path(tmp), ""))
+            self.assertEqual(decision, "pending")
 
     def test_approved(self):
         with TemporaryDirectory() as tmp:
-            decision, _ = gates.read_gate_decision(self._note(Path(tmp), "Approved — ship it\n"))
+            decision, _ = decisions.read_decision(self._note(Path(tmp), "Approved — ship it\n"))
             self.assertEqual(decision, "approved")
 
     def test_rejected(self):
         with TemporaryDirectory() as tmp:
-            decision, line = gates.read_gate_decision(self._note(Path(tmp), "rejected: too big\n"))
+            decision, line = decisions.read_decision(self._note(Path(tmp), "rejected: too big\n"))
             self.assertEqual(decision, "rejected")
             self.assertIn("too big", line)
 
     def test_other_text_is_pending(self):
         with TemporaryDirectory() as tmp:
-            decision, _ = gates.read_gate_decision(self._note(Path(tmp), "hmm let me think\n"))
+            decision, _ = decisions.read_decision(self._note(Path(tmp), "hmm let me think\n"))
             self.assertEqual(decision, "pending")
 
 
@@ -244,27 +283,34 @@ class TestAgentExec(unittest.TestCase):
 
 
 class TestConfig(unittest.TestCase):
-    def test_defaults_resolve_under_project_workflow_dir(self):
-        cfg = load_config(Path("/proj"), {})
-        self.assertEqual(cfg.state_dir, Path("/proj/.workflow/state"))
-        self.assertEqual(cfg.inbox_dir, Path("/proj/.workflow/inbox"))
-        self.assertEqual(cfg.runs_dir, Path("/proj/.workflow/runs"))
-        self.assertEqual(cfg.log_path, Path("/proj/.workflow/log.jsonl"))
+    def test_defaults_resolve_under_state_dir(self):
+        cfg = load_config(Path("/proj/workflow"), {})
+        self.assertEqual(cfg.candidates_dir, Path("/proj/workflow/.state/candidates"))
+        self.assertEqual(cfg.decisions_dir, Path("/proj/workflow/.state/decisions"))
+        self.assertEqual(cfg.runs_dir, Path("/proj/workflow/.state/runs"))
+        self.assertEqual(cfg.log_path, Path("/proj/workflow/.state/log.jsonl"))
+        self.assertEqual(cfg.workflows_dir, Path("/proj/workflow/workflows"))
         self.assertEqual(cfg.max_step_visits, 3)
+        self.assertEqual(cfg.max_depth, 5)
+        self.assertIsNone(cfg.on_event)
         self.assertEqual(cfg.agent_command[0], "claude")
 
     def test_overrides(self):
         cfg = load_config(
-            Path("/proj"),
-            {"inbox_dir": "../inbox", "max_step_visits": 5, "agent_command": ["my-agent"]},
+            Path("/proj/workflow"),
+            {"max_step_visits": 5, "agent_command": ["my-agent"], "on_event": "steps.notify"},
         )
-        self.assertEqual(cfg.inbox_dir, Path("/inbox"))
         self.assertEqual(cfg.max_step_visits, 5)
         self.assertEqual(cfg.agent_command, ("my-agent",))
+        self.assertEqual(cfg.on_event, "steps.notify")
 
     def test_bad_max_visits(self):
         with self.assertRaises(ConfigError):
-            load_config(Path("/proj"), {"max_step_visits": 0})
+            load_config(Path("/proj/workflow"), {"max_step_visits": 0})
+
+    def test_bad_on_event(self):
+        with self.assertRaises(ConfigError):
+            load_config(Path("/proj/workflow"), {"on_event": "notify"})
 
     def test_render_agent_argv(self):
         argv = render_agent_argv(
