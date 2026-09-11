@@ -1,0 +1,17 @@
+# Child workflow: one live agent step. Exercises agent execution + returns.
+workflow: analyze
+
+steps:
+  - id: classify
+    executor: agent
+    prompt: classify.md
+    model: claude-haiku-4-5-20251001   # trivial judgment — cheapest model
+    allowed_tools: [Read]
+    inputs: [candidate.word]
+    outputs:
+      kind: {enum: [GREETING, OTHER]}
+      reason: text
+
+returns:
+  kind: classify.kind
+  reason: classify.reason

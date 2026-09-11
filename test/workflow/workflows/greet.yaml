@@ -1,0 +1,23 @@
+# Parent workflow: composition + routing + python step + gate.
+workflow: greet
+
+steps:
+  - id: analyze
+    executor: workflow
+    run: analyze
+    inputs: [candidate.word]
+    outputs:
+      kind: {enum: [GREETING, OTHER]}
+      reason: text
+    route_on: kind
+    route:
+      GREETING: respond
+      OTHER: halt
+
+  - id: respond
+    executor: python
+    run: steps.respond
+    inputs: [candidate.word, analyze.reason]
+    outputs:
+      message: str
+    gate: respond-approval
