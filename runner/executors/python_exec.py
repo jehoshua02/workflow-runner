@@ -1,7 +1,7 @@
 """Python executor: call a named function in the project's steps module.
 
 Contract: the function takes exactly one argument (the resolved inputs dict)
-and returns the step's outputs dict. Anything it raises halts the candidate.
+and returns the step's outputs dict. Anything it raises halts the input.
 """
 import importlib.util
 from pathlib import Path

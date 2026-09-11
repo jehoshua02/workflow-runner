@@ -7,7 +7,7 @@ steps:
     prompt: classify.md
     model: claude-haiku-4-5-20251001   # trivial judgment — cheapest model
     allowed_tools: [Read]
-    inputs: [candidate.word]
+    inputs: [input.word]
     outputs:
       kind: {enum: [GREETING, OTHER]}
       reason: text

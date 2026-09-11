@@ -16,7 +16,7 @@ steps:
     prompt: triage.md
     model: test-model
     allowed_tools: [Read, Grep]
-    inputs: [candidate.fqn]
+    inputs: [input.fqn]
     outputs:
       verdict: {enum: [DEAD, ALIVE, UNCLEAR]}
       evidence: text
@@ -28,7 +28,7 @@ steps:
   - id: prepare
     kind: python
     run: steps.prepare
-    inputs: [candidate.fqn, triage.evidence]
+    inputs: [input.fqn, triage.evidence]
     outputs:
       branch: str
     gate: merge-approval
@@ -92,7 +92,7 @@ steps:
   - id: sub
     kind: workflow
     run: demo
-    inputs: [candidate.fqn]
+    inputs: [input.fqn]
     outputs:
       branch: str
 """
@@ -127,30 +127,30 @@ class TestState(unittest.TestCase):
             self.assertEqual(loaded, s)
             self.assertEqual(loaded.workflow, "demo")
 
-    def test_candidate_requires_id(self):
+    def test_input_requires_id(self):
         with self.assertRaises(state.StateError):
             state.new_state({"fqn": "A::b"}, "demo", "triage")
 
 
 class TestRendering(unittest.TestCase):
     def test_fills_dotted_placeholders(self):
-        out = rendering.render("check {{candidate.fqn}} at {{triage.evidence}}",
-                               {"candidate.fqn": "A::b", "triage.evidence": "x:1"})
+        out = rendering.render("check {{input.fqn}} at {{triage.evidence}}",
+                               {"input.fqn": "A::b", "triage.evidence": "x:1"})
         self.assertEqual(out, "check A::b at x:1")
 
     def test_missing_value_raises(self):
-        with self.assertRaisesRegex(rendering.RenderError, "candidate.fqn"):
-            rendering.render("{{candidate.fqn}}", {})
+        with self.assertRaisesRegex(rendering.RenderError, "input.fqn"):
+            rendering.render("{{input.fqn}}", {})
 
 
 class TestInputs(unittest.TestCase):
-    def test_resolves_candidate_and_step_outputs(self):
+    def test_resolves_input_and_step_outputs(self):
         values = inputs.resolve(
-            ("candidate.fqn", "triage.evidence"),
+            ("input.fqn", "triage.evidence"),
             {"id": "c", "fqn": "A::b"},
             {"triage": {"evidence": "x:1"}},
         )
-        self.assertEqual(values, {"candidate.fqn": "A::b", "triage.evidence": "x:1"})
+        self.assertEqual(values, {"input.fqn": "A::b", "triage.evidence": "x:1"})
 
     def test_unrun_step_raises(self):
         with self.assertRaisesRegex(inputs.InputError, "not produced"):
@@ -217,8 +217,8 @@ class TestPythonExec(unittest.TestCase):
 
     def test_calls_function_with_inputs(self):
         with TemporaryDirectory() as tmp:
-            mod = self._module(Path(tmp), "def go(inputs):\n    return {'echo': inputs['candidate.fqn']}\n")
-            out = python_exec.call(mod, "steps.go", {"candidate.fqn": "A::b"})
+            mod = self._module(Path(tmp), "def go(inputs):\n    return {'echo': inputs['input.fqn']}\n")
+            out = python_exec.call(mod, "steps.go", {"input.fqn": "A::b"})
             self.assertEqual(out, {"echo": "A::b"})
 
     def test_non_dict_return_raises(self):
@@ -285,7 +285,7 @@ class TestAgentExec(unittest.TestCase):
 class TestConfig(unittest.TestCase):
     def test_defaults_resolve_under_state_dir(self):
         cfg = load_config(Path("/proj/workflow"), {})
-        self.assertEqual(cfg.candidates_dir, Path("/proj/workflow/.state/candidates"))
+        self.assertEqual(cfg.inputs_dir, Path("/proj/workflow/.state/inputs"))
         self.assertEqual(cfg.decisions_dir, Path("/proj/workflow/.state/decisions"))
         self.assertEqual(cfg.runs_dir, Path("/proj/workflow/.state/runs"))
         self.assertEqual(cfg.log_path, Path("/proj/workflow/.state/log.jsonl"))

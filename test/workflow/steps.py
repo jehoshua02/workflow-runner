@@ -3,5 +3,5 @@
 
 def respond(inputs: dict) -> dict:
     return {
-        "message": f"{inputs['candidate.word'].upper()}! ({inputs['analyze.reason']})"
+        "message": f"{inputs['input.word'].upper()}! ({inputs['analyze.reason']})"
     }

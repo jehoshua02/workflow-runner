@@ -6,7 +6,7 @@ a python step, and a human gate.
 
 ```
 cd test
-workflow-runner start greet --candidate-json candidate.json
+workflow-runner start greet --input-json input.json
 workflow-runner tick          # runs the agent live, then waits at the gate
 echo "approved" >> workflow/.state/decisions/hello-1-respond-approval.md
 workflow-runner tick          # finishes

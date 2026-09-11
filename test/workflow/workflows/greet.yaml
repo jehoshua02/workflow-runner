@@ -5,7 +5,7 @@ steps:
   - id: analyze
     kind: workflow
     run: analyze
-    inputs: [candidate.word]
+    inputs: [input.word]
     outputs:
       kind: {enum: [GREETING, OTHER]}
       reason: text
@@ -17,7 +17,7 @@ steps:
   - id: respond
     kind: python
     run: steps.respond
-    inputs: [candidate.word, analyze.reason]
+    inputs: [input.word, analyze.reason]
     outputs:
       message: str
     gate: respond-approval

@@ -17,7 +17,7 @@ steps:
     prompt: triage.md
     model: test-model
     allowed_tools: [Read]
-    inputs: [candidate.fqn]
+    inputs: [input.fqn]
     outputs:
       verdict: {enum: [DEAD, ALIVE, UNCLEAR]}
       evidence: text
@@ -45,7 +45,7 @@ steps:
   - id: sub
     kind: workflow
     run: demo
-    inputs: [candidate.fqn]
+    inputs: [input.fqn]
     outputs:
       branch: str
     next: wrap
@@ -75,7 +75,7 @@ class EngineHarness:
     def __init__(self, tmp: Path, replies, yamls: dict, on_event, workflow: str):
         wf_dir = tmp / "workflow"
         (wf_dir / "prompts").mkdir(parents=True)
-        (wf_dir / "prompts" / "triage.md").write_text("Candidate: {{candidate.fqn}}\nReply JSON.")
+        (wf_dir / "prompts" / "triage.md").write_text("Input: {{input.fqn}}\nReply JSON.")
         (wf_dir / "steps.py").write_text(STEPS_PY)
         raw_config = {"on_event": on_event} if on_event else {}
         self.config = load_config(wf_dir, raw_config)
@@ -94,7 +94,7 @@ class EngineHarness:
         )
 
     def tick(self):
-        return engine.tick_candidate(self.registry[self.state.workflow], self.state, self.ctx)
+        return engine.tick_input(self.registry[self.state.workflow], self.state, self.ctx)
 
 
 def demo_harness(tmp, replies, on_event=None):
@@ -107,7 +107,7 @@ class TestEngine(unittest.TestCase):
             h = demo_harness(Path(tmp), [(0, envelope({"verdict": "ALIVE", "evidence": "x:1"}))])
             s = h.tick()
             self.assertEqual(s.status, "DONE")
-            self.assertIn("Candidate: A::b", h.run.calls[0][1])
+            self.assertIn("Input: A::b", h.run.calls[0][1])
             self.assertEqual(h.run.calls[0][0][:2], ["claude", "-p"])  # built-in executor
 
     def test_generic_agent_without_command_halts(self):
@@ -163,7 +163,7 @@ class TestEngine(unittest.TestCase):
             h.tick()
             records = sorted((h.config.runs_dir / "cand-1").glob("*.json"))
             record = json.loads(records[0].read_text())
-            self.assertEqual(record["inputs"], {"candidate.fqn": "A::b"})
+            self.assertEqual(record["inputs"], {"input.fqn": "A::b"})
             self.assertEqual(record["outputs"]["verdict"], "ALIVE")
 
     def test_unified_log_written(self):
@@ -225,11 +225,11 @@ class TestComposition(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             h = self._harness(Path(tmp), [(0, envelope({"verdict": "ALIVE", "evidence": "x"}))])
             h.tick()
-            child_path = state.state_path(h.config.candidates_dir, "cand-1.sub")
+            child_path = state.state_path(h.config.inputs_dir, "cand-1.sub")
             self.assertTrue(child_path.exists())
             child = state.load_state(child_path)
             self.assertEqual(child.status, "DONE")
-            self.assertEqual(child.candidate["fqn"], "A::b")
+            self.assertEqual(child.input["fqn"], "A::b")
 
 
 if __name__ == "__main__":
