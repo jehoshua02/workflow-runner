@@ -330,7 +330,8 @@ class TestGraph(unittest.TestCase):
         width = int(re.search(r"width='(\d+)'", svg).group(1))
         xs = [int(x) for x in re.findall(r"<rect x='(\d+)'", svg)]
         self.assertTrue(all(x + graph.NODE_W <= width for x in xs))
-        self.assertRegex(svg, r"<path class='edge' d='M[\d.]+,[\d.]+ L[\d.]+,[\d.]+'")  # b -> c vertical
+        self.assertRegex(svg, r"<path class='edge' d='M[\d.]+,[\d.]+ V[\d.]+'")  # b -> c vertical
+        self.assertNotRegex(svg, r"d='[^']*[CQ]")  # orthogonal only: H/V/L segments
         self.assertEqual(svg.count("class='edge back'"), 2)  # a->a, b->a
 
     def test_implicit_done_edge_and_gate_step(self):

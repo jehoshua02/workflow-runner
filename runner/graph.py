@@ -4,11 +4,12 @@ Layout: rank = BFS depth from the first step (a step's rank is fixed on first
 discovery, so back-edges never move nodes). The builtin terminals `done` and
 `halt` sit in the last column. Nodes within a rank stack in discovery order.
 
-Edges: parallel transitions (same src → dst) are merged into one line with
-stacked labels. Each node fans its outgoing edges across distinct ports on
-its right side (incoming on the left) so lines never share a start point.
-Back-edges (to the same or an earlier column) arc over the top of the graph;
-the canvas reserves headroom for them.
+Edges are orthogonal (horizontal / vertical segments only). Parallel
+transitions (same src → dst) are merged into one line with stacked labels.
+Each node fans its outgoing edges across distinct ports on its right side
+(incoming on the left); a row change runs its vertical in the gap after the
+source column, one channel per edge. Back-edges go up, across the top and
+down; the canvas reserves headroom for them.
 
 Rendering takes `marks` — {step_id: css_class} — so the same drawing serves
 the workflow page (no marks) and an input page (visited / current / halted).
@@ -117,23 +118,26 @@ def _ports(lay: dict) -> tuple:
     return out_ports, in_ports
 
 
-def _bezier(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
-    u = 1 - t
-    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3
+def _channels(lay: dict) -> dict:
+    """(src, dst) -> (x of the vertical segment, index within its gap).
 
-
-def _point_at_x(x1: float, y1: float, x2: float, y2: float, x: float) -> tuple:
-    """Point on the S-curve M x1,y1 C mx,y1 mx,y2 x2,y2 at horizontal position x (bisection)."""
-    mx = (x1 + x2) / 2
-    lo, hi = 0.0, 1.0
-    for _ in range(30):
-        t = (lo + hi) / 2
-        if _bezier(x1, mx, mx, x2, t) < x:
-            lo = t
-        else:
-            hi = t
-    t = (lo + hi) / 2
-    return _bezier(x1, mx, mx, x2, t), _bezier(y1, y1, y2, y2, t)
+    Every forward edge that changes row runs its vertical in the gap right
+    after its source column; edges sharing a gap get evenly spaced channels
+    so verticals never overlap.
+    """
+    by_gap = {}
+    for src, dst, _ in lay["edges"]:
+        s_node, d_node = lay["nodes"][src], lay["nodes"][dst]
+        if d_node["rank"] <= s_node["rank"] or d_node["row"] == s_node["row"]:
+            continue
+        by_gap.setdefault(s_node["rank"], []).append((src, dst))
+    channels = {}
+    for gap, edges in by_gap.items():
+        left = PAD + gap * (NODE_W + COL_GAP) + NODE_W
+        n = len(edges)
+        for i, key in enumerate(sorted(edges, key=lambda e: lay["nodes"][e[1]]["row"])):
+            channels[key] = (left + COL_GAP * (i + 1) / (n + 1), i)
+    return channels
 
 
 def _label(x: float, y: float, labels: list, anchor: str) -> str:
@@ -159,52 +163,49 @@ def render_svg(workflow: Workflow, marks: dict, links: dict) -> str:
         "<defs><marker id='arrow' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'>"
         "<path d='M0,0 L10,5 L0,10 z' class='arrowhead'/></marker></defs>",
     ]
+    channels = _channels(lay)
     lane = 0
     for src, dst, labels in lay["edges"]:
         s_node, d_node = lay["nodes"][src], lay["nodes"][dst]
         sx, sy = _origin(s_node, top)
         dx, dy = _origin(d_node, top)
-        if src == dst:  # self-loop: small arc over the node
+        n_lines = len(labels)
+        if src == dst:  # self-loop: up, across, down over the node
             lane += 1
             apex = top - lane * LOOP_RISE + 6
             x1, x2 = sx + NODE_W * 0.6, sx + NODE_W * 0.4
-            d = f"M{x1},{sy} C{x1 + 20},{apex} {x2 - 20},{apex} {x2},{sy}"
+            d = f"M{x1},{sy} V{apex} H{x2} V{sy}"
             parts.append(f"<path class='edge back' d='{d}' marker-end='url(#arrow)'/>")
-            parts.append(_label((x1 + x2) / 2, apex + 4, labels, "middle"))
-        elif d_node["rank"] < s_node["rank"]:  # back-edge: arc over the top
+            parts.append(_label((x1 + x2) / 2, apex - 5 - LABEL_LINE * (n_lines - 1), labels, "middle"))
+        elif d_node["rank"] < s_node["rank"]:  # back-edge: up, across the top, down
             lane += 1
             apex = top - lane * LOOP_RISE + 6
             x1, x2 = sx + NODE_W * 0.3, dx + NODE_W * 0.7
-            d = f"M{x1},{sy} C{x1},{apex} {x2},{apex} {x2},{dy}"
+            d = f"M{x1},{sy} V{apex} H{x2} V{dy}"
             parts.append(f"<path class='edge back' d='{d}' marker-end='url(#arrow)'/>")
-            parts.append(_label((x1 + x2) / 2, apex + 4, labels, "middle"))
+            parts.append(_label((x1 + x2) / 2, apex - 5 - LABEL_LINE * (n_lines - 1), labels, "middle"))
         elif d_node["rank"] == s_node["rank"]:  # same column: vertical between neighbours
             down = d_node["row"] > s_node["row"]
             x = sx + NODE_W / 2
             y1 = sy + NODE_H if down else sy
             y2 = dy if down else dy + NODE_H
-            parts.append(f"<path class='edge' d='M{x},{y1} L{x},{y2}' marker-end='url(#arrow)'/>")
-            parts.append(_label(x + 8, (y1 + y2) / 2 + 4, labels, "start"))
-        else:  # forward: S-curve between fanned ports
+            parts.append(f"<path class='edge' d='M{x},{y1} V{y2}' marker-end='url(#arrow)'/>")
+            parts.append(_label(x + 8, (y1 + y2) / 2 + 4 - LABEL_LINE * (n_lines - 1) / 2, labels, "start"))
+        elif d_node["row"] == s_node["row"]:  # same row: one horizontal
+            y = sy + out_ports[src][dst]
+            x1, x2 = sx + NODE_W, dx
+            parts.append(f"<path class='edge' d='M{x1},{y} H{x2}' marker-end='url(#arrow)'/>")
+            parts.append(_label((x1 + x2) / 2, y - 8 - LABEL_LINE * (n_lines - 1), labels, "middle"))
+        else:  # row change: horizontal, vertical in the gap channel, horizontal
             x1, y1 = sx + NODE_W, sy + out_ports[src][dst]
             x2, y2 = dx, dy + in_ports[dst][src]
-            mx = (x1 + x2) / 2
-            d = f"M{x1},{y1} C{mx},{y1} {mx},{y2} {x2},{y2}"
-            parts.append(f"<path class='edge' d='{d}' marker-end='url(#arrow)'/>")
-            mid_y = (y1 + y2) / 2
-            span = d_node["rank"] - s_node["rank"]
-            if abs(y2 - y1) <= NODE_H:  # near-flat: label centred above the line
-                parts.append(_label(mx, mid_y - 8 - LABEL_LINE * (len(labels) - 1), labels, "middle"))
-            elif span > 1:  # passes under other columns: label in the first gap, off the curve
-                gx, gy = _point_at_x(x1, y1, x2, y2, x1 + COL_GAP / 2)
-                if y2 > y1:
-                    parts.append(_label(gx, gy + 16, labels, "middle"))
-                else:
-                    parts.append(_label(gx, gy - 10 - LABEL_LINE * (len(labels) - 1), labels, "middle"))
-            elif y2 > y1:  # descends to the right: the up-right quadrant is clear
-                parts.append(_label(mx + 8, mid_y - 6 - LABEL_LINE * (len(labels) - 1), labels, "start"))
-            else:  # ascends to the right: the down-right quadrant is clear
-                parts.append(_label(mx + 8, mid_y + 14, labels, "start"))
+            cx, index = channels[(src, dst)]
+            parts.append(f"<path class='edge' d='M{x1},{y1} H{cx} V{y2} H{x2}' marker-end='url(#arrow)'/>")
+            mid_y = (y1 + y2) / 2 + 4 - LABEL_LINE * (n_lines - 1) / 2
+            if index % 2 == 0:  # alternate sides so neighbouring channels' labels don't collide
+                parts.append(_label(cx + 7, mid_y, labels, "start"))
+            else:
+                parts.append(_label(cx - 7, mid_y, labels, "end"))
     for node_id, node in lay["nodes"].items():
         x, y = _origin(node, top)
         classes = ["node", f"kind-{node['kind']}"]
