@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from . import decisions, engine, state, web
+from . import control, decisions, engine, state, web
 from .config import load_config
 from .executors import agent_exec, python_exec
 from .workflow import load_registry
@@ -164,21 +164,16 @@ def cmd_reject(args) -> None:
 
 def cmd_retry(args) -> None:
     config, _, _ = _load(args)
-    path = state.state_path(config.inputs_dir, args.input_id)
-    if not path.exists():
-        raise SystemExit(f"no state for {args.input_id}")
-    s = state.load_state(path)
-    if s.status != "HALTED":
-        raise SystemExit(f"{args.input_id} is {s.status}, not HALTED")
-    s.status = "RUNNING"
-    state.record(s, "retried", {"step": s.current_step}, _clock())
-    state.save_state(path, s)
+    try:
+        s = control.retry(config, args.input_id, _clock())
+    except (FileNotFoundError, control.ControlError) as exc:
+        raise SystemExit(str(exc))
     print(f"{args.input_id}: RUNNING @ {s.current_step} — run `tick` to execute")
 
 
 def cmd_serve(args) -> None:
     config, registry, sources = _load(args)
-    server = web.make_server(config, registry, sources, "127.0.0.1", args.port)
+    server = web.make_server(config, registry, sources, "127.0.0.1", args.port, _clock)
     print(f"workflow-runner ui: http://127.0.0.1:{server.server_address[1]}  (ctrl-c to stop)")
     try:
         server.serve_forever()

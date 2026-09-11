@@ -48,10 +48,33 @@ workflow-runner retry <input-id>    # HALTED -> RUNNING at the failed step
 workflow-runner serve [--port 8765] # local web UI: browse inputs/runs/decisions/workflows, approve/reject
 ```
 
-Only `tick` executes steps. `approve`, `reject` and the web UI write the
-decision file; `tick` (or a running `tick --loop`) acts on it — one ticker,
-one writer of state. The UI binds 127.0.0.1 only; its approve/reject form
-carries a per-server token and refuses cross-origin POSTs.
+Only `tick` executes steps. `approve`, `reject`, `retry` and the web UI write
+state; `tick` (or a running `tick --loop`) acts on it — one ticker, one writer.
+
+### Web UI
+
+`workflow-runner serve` (127.0.0.1 only, stdlib, no JavaScript):
+
+- **inputs** — status tree, auto-refreshing.
+- **input** — the workflow's step graph with visited / current / halted steps
+  highlighted, pending decisions with approve / reject, retry for HALTED,
+  every run record (inputs, outputs or error, duration), child workflows, history.
+- **workflows** — step graph (child workflows are clickable), step table
+  (kind, run/prompt, model, tools, inputs, outputs, routes, gates), returns, YAML.
+- **log** — unified event tail.
+
+Writes go through the same code as the CLI (`decisions.respond`,
+`control.retry`). Every form carries a per-server random token; cross-origin
+POSTs are refused.
+
+**Theming:** all colors, fonts and sizes are CSS variables in
+`runner/theme.css` (light + dark via `prefers-color-scheme`). Put a
+`workflow/theme.css` in your project to override any of them — it is served
+after the default:
+
+```css
+:root { --accent: #7c3aed; --font: "IBM Plex Sans", sans-serif; }
+```
 
 Defaults resolve only at this edge (CLI + config.yml); the engine requires
 every value explicitly.
