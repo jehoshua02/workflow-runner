@@ -209,6 +209,31 @@ class TestDecisions(unittest.TestCase):
             decision, _ = decisions.read_decision(self._note(Path(tmp), "hmm let me think\n"))
             self.assertEqual(decision, "pending")
 
+    def test_respond_approves(self):
+        with TemporaryDirectory() as tmp:
+            path = self._note(Path(tmp), "")
+            decisions.respond(path, "approved")
+            self.assertEqual(decisions.read_decision(path)[0], "approved")
+
+    def test_respond_refuses_answered(self):
+        with TemporaryDirectory() as tmp:
+            path = self._note(Path(tmp), "approved\n")
+            with self.assertRaisesRegex(ValueError, "already approved"):
+                decisions.respond(path, "rejected: no")
+
+    def test_respond_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            decisions.respond(Path("/nonexistent-note.md"), "approved")
+
+    def test_pending_for_lists_only_pending(self):
+        with TemporaryDirectory() as tmp:
+            answered = self._note(Path(tmp), "approved\n")
+            open_path = decisions.decision_path(Path(tmp), "cand-1", "other-gate")
+            decisions.write_decision(open_path, "t", "l", "ask?", "now")
+            pending = decisions.pending_for(Path(tmp), "cand-1")
+            self.assertEqual(pending, [open_path])
+            self.assertNotIn(answered, pending)
+
 
 class TestPythonExec(unittest.TestCase):
     def _module(self, tmp: Path, body: str):

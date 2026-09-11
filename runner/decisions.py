@@ -34,6 +34,28 @@ def write_decision(path: Path, title: str, link: str, ask: str, now: str) -> Non
     path.write_text(NOTE_TEMPLATE.format(title=title, link=link, ask=ask, now=now))
 
 
+def respond(path: Path, line: str) -> None:
+    """Write a decision (`approved` / `rejected: <reason>`) into the Response section."""
+    if not path.exists():
+        raise FileNotFoundError(f"no decision file at {path}")
+    current, _ = read_decision(path)
+    if current != "pending":
+        raise ValueError(f"decision already {current}: {path}")
+    with path.open("a") as fh:
+        fh.write(line.rstrip() + "\n")
+
+
+def pending_for(decisions_dir: Path, input_id: str) -> list:
+    """Paths of pending decision files for one input."""
+    if not decisions_dir.exists():
+        return []
+    return [
+        p
+        for p in sorted(decisions_dir.glob(f"{input_id}-*.md"))
+        if read_decision(p)[0] == "pending"
+    ]
+
+
 def read_decision(path: Path) -> tuple:
     """Return ("pending", ""), ("approved", <line>), or ("rejected", <line>)."""
     if not path.exists():

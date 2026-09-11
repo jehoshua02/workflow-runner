@@ -7,10 +7,12 @@ Discovery (defaults live here, at the edge; the engine requires everything):
 - runtime state:  ./workflow/.state/{inputs,runs,decisions,log.jsonl}
 
 Commands:
-  workflow-runner start <workflow> --input-json c.json   enqueue an input
-  workflow-runner tick [--loop] [--interval 60]              run once; --loop runs forever
-  workflow-runner status                                     one line per input
-  workflow-runner retry <input-id>                       HALTED -> RUNNING at failed step
+  workflow-runner start <workflow> --input-json c.json    enqueue an input
+  workflow-runner tick [--loop] [--interval 60]           run once; --loop runs forever
+  workflow-runner status                                  one line per input
+  workflow-runner approve <input-id> [gate]               answer a pending decision, then tick
+  workflow-runner reject <input-id> <reason> [gate]       answer a pending decision, then tick
+  workflow-runner retry <input-id>                        HALTED -> RUNNING at failed step
 """
 import argparse
 import json
@@ -20,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from . import engine, state
+from . import decisions, engine, state
 from .config import load_config
 from .executors import agent_exec, python_exec
 from .workflow import load_registry
@@ -122,6 +124,41 @@ def cmd_status(args) -> None:
         print(f"{indent}{s.input['id']} [{s.workflow}]: {s.status} @ {s.current_step}")
 
 
+def _resolve_decision(config, input_id: str, gate: str | None) -> Path:
+    if gate is not None:
+        path = decisions.decision_path(config.decisions_dir, input_id, gate)
+        if not path.exists():
+            raise SystemExit(f"no decision file for {input_id} gate `{gate}`")
+        return path
+    pending = decisions.pending_for(config.decisions_dir, input_id)
+    if not pending:
+        raise SystemExit(f"no pending decisions for {input_id}")
+    if len(pending) > 1:
+        names = ", ".join(p.stem.removeprefix(f"{input_id}-") for p in pending)
+        raise SystemExit(f"{input_id} has several pending decisions — name one: {names}")
+    return pending[0]
+
+
+def _answer(args, line: str) -> None:
+    config, registry = _load(args)
+    path = _resolve_decision(config, args.input_id, args.gate)
+    try:
+        decisions.respond(path, line)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc))
+    print(f"{path.name}: {line}")
+    for out in _tick_once(config, registry):
+        print(out)
+
+
+def cmd_approve(args) -> None:
+    _answer(args, "approved")
+
+
+def cmd_reject(args) -> None:
+    _answer(args, f"rejected: {args.reason}")
+
+
 def cmd_retry(args) -> None:
     config, _ = _load(args)
     path = state.state_path(config.inputs_dir, args.input_id)
@@ -152,6 +189,17 @@ def main() -> None:
     tick.set_defaults(func=cmd_tick)
 
     sub.add_parser("status").set_defaults(func=cmd_status)
+
+    approve = sub.add_parser("approve")
+    approve.add_argument("input_id")
+    approve.add_argument("gate", nargs="?", default=None)
+    approve.set_defaults(func=cmd_approve)
+
+    reject = sub.add_parser("reject")
+    reject.add_argument("input_id")
+    reject.add_argument("reason")
+    reject.add_argument("gate", nargs="?", default=None)
+    reject.set_defaults(func=cmd_reject)
 
     retry = sub.add_parser("retry")
     retry.add_argument("input_id")
