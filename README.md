@@ -42,6 +42,8 @@ workflow-runner start <workflow> --input-json c.json
 workflow-runner tick                    # run once: advance everything that can move
 workflow-runner tick --loop --interval 60
 workflow-runner status                  # tree: inputs + child workflows
+workflow-runner approve <input-id> [gate]        # answer a pending decision + tick
+workflow-runner reject <input-id> <reason> [gate] # answer + tick
 workflow-runner retry <input-id>    # HALTED -> RUNNING at the failed step
 ```
 
