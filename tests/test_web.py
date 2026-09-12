@@ -65,35 +65,45 @@ def _project(tmp: Path):
 class TestRender(unittest.TestCase):
     def test_index_lists_inputs_and_escapes(self):
         s = state.new_state({"id": "x<1>"}, "greet", "classify")
-        html = web.render_index(SITE, [s])
+        html = web.render_runs(SITE, [s])
         self.assertIn("x&lt;1&gt;", html)
         self.assertNotIn("x<1>", html)
-        self.assertIn("/inputs/x%3C1%3E", html)
+        self.assertIn("/runs/x%3C1%3E", html)
 
     def test_input_page_shows_pending_form_only_when_pending(self):
         s = state.new_state({"id": "hello-1"}, "greet", "classify")
         pending = [{"gate": "g", "status": "pending", "line": "", "body": "b"}]
         registry = load_registry({"greet": WF})
-        html = web.render_input(SITE, s, registry["greet"], registry, [], pending, [], "tok")
+        html = web.render_run(SITE, s, registry["greet"], registry, [], pending, [], "tok")
         self.assertIn("name='token' value='tok'", html)
         self.assertIn("value='approve'", html)
         answered = [{"gate": "g", "status": "approved", "line": "approved", "body": "b"}]
-        self.assertNotIn("value='approve'", web.render_input(SITE, s, registry["greet"], registry, [], answered, [], "tok"))
+        self.assertNotIn("value='approve'", web.render_run(SITE, s, registry["greet"], registry, [], answered, [], "tok"))
 
     def test_input_page_shows_run_error(self):
         s = state.new_state({"id": "hello-1"}, "greet", "classify")
         runs = [{"file": "001-classify.json", "step": "classify", "started": "s", "finished": "f",
                  "inputs": {}, "error": "boom"}]
         registry = load_registry({"greet": WF})
-        self.assertIn("boom", web.render_input(SITE, s, registry["greet"], registry, runs, [], [], "tok"))
+        self.assertIn("boom", web.render_run(SITE, s, registry["greet"], registry, runs, [], [], "tok"))
 
     def test_halted_input_shows_retry_and_marks_graph(self):
         s = state.new_state({"id": "hello-1"}, "greet", "classify")
         s.status = "HALTED"
         registry = load_registry({"greet": WF})
-        html = web.render_input(SITE, s, registry["greet"], registry, [], [], [], "tok")
-        self.assertIn("/inputs/hello-1/retry", html)
+        html = web.render_run(SITE, s, registry["greet"], registry, [], [], [], "tok")
+        self.assertIn("/runs/hello-1/retry", html)
         self.assertIn("node kind-python halted", html)
+
+    def test_run_page_labels_step_inputs_and_plain_title(self):
+        s = state.new_state({"id": "hello-1"}, "greet", "classify")
+        registry = load_registry({"greet": WF})
+        steps = [{"file": "001-classify.json", "step": "classify", "started": "s", "finished": "f",
+                  "inputs": {"input.word": "hola"}, "outputs": {"kind": "GREETING"}}]
+        html = web.render_run(SITE, s, registry["greet"], registry, steps, [], [], "tok")
+        self.assertIn("<summary>step inputs</summary>", html)
+        self.assertIn("<h2>steps</h2>", html)
+        self.assertIn("<title>hello-1 · greet · workflow-runner</title>", html)
 
     def test_render_value_structures(self):
         self.assertIn("<ol class='values'>", web.render_value(["a", "b"]))
@@ -112,7 +122,7 @@ class TestRender(unittest.TestCase):
 
     def test_workflow_page_shows_routes_and_gate(self):
         registry = load_registry({"greet": WF})
-        html = web.render_workflow(SITE, registry["greet"], registry, WF)
+        html = web.render_workflow(SITE, registry["greet"], registry, WF, [])
         self.assertIn("<code>GREETING</code> → <code>respond</code>", html)
         self.assertIn("<svg class='graph'", html)
         self.assertIn("gate: respond-approval", html)
@@ -187,15 +197,17 @@ class TestServer(unittest.TestCase):
             raise
 
     def _token(self) -> str:
-        html = self._get("/inputs/hello-1")
+        html = self._get("/runs/hello-1")
         marker = "name='token' value='"
         start = html.index(marker) + len(marker)
         return html[start : html.index("'", start)]
 
     def test_pages_render(self):
-        self.assertIn("hello-1", self._get("/"))
-        self.assertIn("respond-approval", self._get("/inputs/hello-1"))
-        self.assertIn("001-classify.json", self._get("/inputs/hello-1"))
+        self.assertIn("hello-1", self._get("/runs"))
+        self.assertIn("hello-1", self._get("/workflows/greet"))  # a workflow lists its runs
+        self.assertIn("WAITING_DECISION", self._get("/workflows"))  # run counts per workflow
+        self.assertIn("respond-approval", self._get("/runs/hello-1"))
+        self.assertIn("001-classify.json", self._get("/runs/hello-1"))
         self.assertIn("greet", self._get("/workflows"))
         self.assertIn("steps.respond", self._get("/workflows/greet"))
         self.assertIn("step_done", self._get("/log"))
@@ -206,7 +218,7 @@ class TestServer(unittest.TestCase):
         s = state.load_state(path)
         s.status = "HALTED"
         state.save_state(path, s)
-        resp = self._post("/inputs/hello-1/retry", {"token": self._token()}, {"Origin": self.base})
+        resp = self._post("/runs/hello-1/retry", {"token": self._token()}, {"Origin": self.base})
         self.assertEqual(resp.status, 303)
         s = state.load_state(path)
         self.assertEqual(s.status, "RUNNING")
@@ -215,33 +227,33 @@ class TestServer(unittest.TestCase):
 
     def test_retry_non_halted_409(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
-            self._post("/inputs/hello-1/retry", {"token": self._token()}, {"Origin": self.base})
+            self._post("/runs/hello-1/retry", {"token": self._token()}, {"Origin": self.base})
         self.assertEqual(cm.exception.code, 409)
 
     def test_unknown_input_404(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
-            self._get("/inputs/nope")
+            self._get("/runs/nope")
         self.assertEqual(cm.exception.code, 404)
 
     def test_approve_via_form_redirects_and_writes(self):
-        resp = self._post("/inputs/hello-1/decide",
+        resp = self._post("/runs/hello-1/decide",
                           {"token": self._token(), "gate": "respond-approval", "action": "approve"},
                           {"Origin": self.base})
         self.assertEqual(resp.status, 303)
-        self.assertEqual(resp.headers["Location"], "/inputs/hello-1")
+        self.assertEqual(resp.headers["Location"], "/runs/hello-1")
         path = decisions.decision_path(self.config.decisions_dir, "hello-1", "respond-approval")
         self.assertEqual(decisions.read_decision(path)[0], "approved")
 
     def test_cross_origin_post_refused(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
-            self._post("/inputs/hello-1/decide",
+            self._post("/runs/hello-1/decide",
                        {"token": self._token(), "gate": "respond-approval", "action": "approve"},
                        {"Origin": "http://evil.example"})
         self.assertEqual(cm.exception.code, 403)
 
     def test_missing_token_refused(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:
-            self._post("/inputs/hello-1/decide", {"gate": "respond-approval", "action": "approve"}, {})
+            self._post("/runs/hello-1/decide", {"gate": "respond-approval", "action": "approve"}, {})
         self.assertEqual(cm.exception.code, 403)
 
 

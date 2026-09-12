@@ -1,4 +1,8 @@
-"""Local web UI: browse inputs, runs, decisions and workflows; answer decisions; retry halts.
+"""Local web UI: workflow definitions and workflow runs; answer decisions; retry halts.
+
+Vocabulary (UI only — the engine/CLI keep `input`): a *run* is one input's
+passage through a workflow (`.state/inputs/<id>.json`); a run is made of
+*steps* (`.state/runs/<id>/NNN-<step>.json`).
 
 A read view over `.state/` plus two writes — `decide` (via `decisions.respond`)
 and `retry` (via `control.retry`) — the same paths the CLI uses. The UI never
@@ -88,8 +92,8 @@ def _e(value) -> str:
     return escape(str(value), quote=True)
 
 
-def input_url(input_id: str) -> str:
-    return f"/inputs/{quote(input_id, safe='')}"
+def run_url(run_id: str) -> str:
+    return f"/runs/{quote(run_id, safe='')}"
 
 
 def workflow_url(name: str) -> str:
@@ -131,10 +135,11 @@ def render_value(value) -> str:
 class Site:
     project: str
 
-    def page(self, title: str, body: str, active: str, crumbs: str, refresh: int | None) -> str:
+    def page(self, title: str, heading: str, body: str, active: str, crumbs: str, refresh: int | None) -> str:
+        """`title` is plain text for the browser tab; `heading` is HTML for the h1."""
         links = "".join(
             f"<a href='{href}' class='{'active' if key == active else ''}'>{key}</a>"
-            for key, href in (("inputs", "/"), ("workflows", "/workflows"), ("log", "/log"))
+            for key, href in (("workflows", "/workflows"), ("runs", "/runs"), ("log", "/log"))
         )
         meta_refresh = f"<meta http-equiv='refresh' content='{refresh}'>" if refresh else ""
         crumbs_html = f"<div class='crumbs'>{crumbs}</div>" if crumbs else ""
@@ -143,33 +148,33 @@ class Site:
             f"{meta_refresh}<title>{_e(title)} · workflow-runner</title>"
             "<link rel='stylesheet' href='/theme.css'></head><body>"
             f"<nav><span class='brand'>workflow-runner</span>{links}<span class='project'>{_e(self.project)}</span></nav>"
-            f"<main>{crumbs_html}<h1>{title}</h1>{body}</main></body></html>"
+            f"<main>{crumbs_html}<h1>{heading}</h1>{body}</main></body></html>"
         )
 
 
-def render_index(site: Site, states: list) -> str:
-    if not states:
-        return site.page("inputs", "<p class='muted'>no inputs — <code>workflow-runner start …</code></p>", "inputs", "", INDEX_REFRESH_SECONDS)
+def _run_rows(states: list, show_workflow: bool) -> str:
     rows = []
     for s in states:
         depth = s.input["id"].count(".")
         indent = "<span class='muted'>└ </span>" if depth else ""
         rows.append(
             "<tr>"
-            f"<td style='padding-left:{12 + depth * 22}px'>{indent}<a href='{input_url(s.input['id'])}'><code>{_e(s.input['id'])}</code></a></td>"
-            f"<td><a href='{workflow_url(s.workflow)}'>{_e(s.workflow)}</a></td>"
-            f"<td>{_badge(s.status)}</td>"
+            f"<td style='padding-left:{12 + depth * 22}px'>{indent}<a href='{run_url(s.input['id'])}'><code>{_e(s.input['id'])}</code></a></td>"
+            + (f"<td><a href='{workflow_url(s.workflow)}'>{_e(s.workflow)}</a></td>" if show_workflow else "")
+            + f"<td>{_badge(s.status)}</td>"
             f"<td><code>{_e(s.current_step)}</code></td>"
             f"<td class='muted'>{_e(s.history[-1]['at']) if s.history else ''}</td>"
             "</tr>"
         )
-    body = (
-        "<table><tr><th>input</th><th>workflow</th><th>status</th><th>step</th><th>last event</th></tr>"
-        + "".join(rows)
-        + "</table>"
-        f"<p class='muted'>refreshes every {INDEX_REFRESH_SECONDS}s</p>"
-    )
-    return site.page("inputs", body, "inputs", "", INDEX_REFRESH_SECONDS)
+    head = "<th>run</th>" + ("<th>workflow</th>" if show_workflow else "") + "<th>status</th><th>step</th><th>last event</th>"
+    return f"<table><tr>{head}</tr>{''.join(rows)}</table>"
+
+
+def render_runs(site: Site, states: list) -> str:
+    if not states:
+        return site.page("runs", "runs", "<p class='muted'>no runs yet — <code>workflow-runner start &lt;workflow&gt; --input-json …</code></p>", "runs", "", INDEX_REFRESH_SECONDS)
+    body = _run_rows(states, True) + f"<p class='muted'>refreshes every {INDEX_REFRESH_SECONDS}s</p>"
+    return site.page("runs", "runs", body, "runs", "", INDEX_REFRESH_SECONDS)
 
 
 def _hidden(token: str, **fields) -> str:
@@ -178,7 +183,7 @@ def _hidden(token: str, **fields) -> str:
 
 
 def _decide_forms(input_id: str, gate: str, token: str) -> str:
-    action = f"{input_url(input_id)}/decide"
+    action = f"{run_url(input_id)}/decide"
     return (
         f"<form class='inline' method='post' action='{action}'>{_hidden(token, gate=gate, action='approve')}"
         "<button class='primary'>approve</button></form>"
@@ -190,7 +195,7 @@ def _decide_forms(input_id: str, gate: str, token: str) -> str:
 
 def _retry_form(input_id: str, token: str) -> str:
     return (
-        f"<form class='inline' method='post' action='{input_url(input_id)}/retry'>{_hidden(token)}"
+        f"<form class='inline' method='post' action='{run_url(input_id)}/retry'>{_hidden(token)}"
         "<button class='primary'>retry from this step</button> "
         "<span class='muted'>sets RUNNING; the next tick re-executes the step</span></form>"
     )
@@ -200,10 +205,10 @@ def _child_links(step, registry: dict) -> dict:
     return {s.id: workflow_url(s.run) for s in step.values() if s.kind == "workflow" and s.run in registry}
 
 
-def render_input(site: Site, s: state.InputState, workflow: Workflow, registry: dict, runs: list, decision_list: list, children: list, token: str) -> str:
+def render_run(site: Site, s: state.InputState, workflow: Workflow, registry: dict, steps: list, decision_list: list, children: list, token: str) -> str:
     input_id = s.input["id"]
-    title = f"<code>{_e(input_id)}</code> {_badge(s.status)} <span class='muted'>@ {_e(s.current_step)}</span>"
-    crumbs = f"<a href='/'>inputs</a> / {_e(input_id)} · workflow <a href='{workflow_url(s.workflow)}'>{_e(s.workflow)}</a>"
+    heading = f"<code>{_e(input_id)}</code> {_badge(s.status)} <span class='muted'>@ {_e(s.current_step)}</span>"
+    crumbs = f"<a href='/workflows'>workflows</a> / <a href='{workflow_url(s.workflow)}'>{_e(s.workflow)}</a> / <a href='/runs'>runs</a> / {_e(input_id)}"
     parts = []
 
     marks = graph.marks_for(s.status, s.current_step, s.history)
@@ -224,27 +229,21 @@ def render_input(site: Site, s: state.InputState, workflow: Workflow, registry: 
         )
 
     if children:
-        parts.append("<h2>child workflows</h2><table><tr><th>input</th><th>workflow</th><th>status</th><th>step</th></tr>")
-        for c in children:
-            parts.append(
-                f"<tr><td><a href='{input_url(c.input['id'])}'><code>{_e(c.input['id'])}</code></a></td>"
-                f"<td><a href='{workflow_url(c.workflow)}'>{_e(c.workflow)}</a></td><td>{_badge(c.status)}</td><td><code>{_e(c.current_step)}</code></td></tr>"
-            )
-        parts.append("</table>")
+        parts.append("<h2>child runs</h2>" + _run_rows(children, True))
 
-    parts.append("<h2>runs</h2>")
-    if not runs:
-        parts.append("<p class='muted'>none yet</p>")
-    for r in runs:
+    parts.append("<h2>steps</h2>")
+    if not steps:
+        parts.append("<p class='muted'>none executed yet</p>")
+    for r in steps:
         outcome = "error" if "error" in r else "outputs"
         parts.append(
             f"<div class='card'><header><h3><code>{_e(r['step'])}</code></h3><span class='muted'>{_e(r['file'])}</span>"
             f"<span class='when'>{_e(r['started'])} · {_duration(r['started'], r['finished'])}</span></header>"
-            f"<details><summary>inputs</summary>{render_value(r['inputs'])}</details>"
+            f"<details><summary>step inputs</summary>{render_value(r['inputs'])}</details>"
             f"<h3 style='margin-top:10px'>{outcome}</h3>{render_value(r[outcome])}</div>"
         )
 
-    parts.append("<h2>input record</h2>" + render_value(s.input))
+    parts.append("<h2>input</h2>" + render_value(s.input))
 
     if answered:
         parts.append("<h2>answered decisions</h2>")
@@ -259,18 +258,23 @@ def render_input(site: Site, s: state.InputState, workflow: Workflow, registry: 
         for h in reversed(s.history)
     )
     parts.append(f"<h2>history</h2><details><summary>{len(s.history)} events, newest first</summary><table><tr><th>at</th><th>event</th><th>detail</th></tr>{rows}</table></details>")
-    return site.page(title, "".join(parts), "inputs", crumbs, None)
+    return site.page(f"{input_id} · {s.workflow}", heading, "".join(parts), "runs", crumbs, None)
 
 
-def render_workflows(site: Site, registry: dict) -> str:
+def render_workflows(site: Site, registry: dict, states: list) -> str:
+    counts = {}
+    for s in states:
+        counts.setdefault(s.workflow, {}).setdefault(s.status, 0)
+        counts[s.workflow][s.status] += 1
     rows = "".join(
         f"<tr><td><a href='{workflow_url(name)}'><code>{_e(name)}</code></a></td>"
         f"<td>{len(wf.steps)}</td><td><code>{_e(wf.first_step)}</code></td>"
         f"<td>{', '.join(sorted({s.kind for s in wf.steps.values()}))}</td>"
-        f"<td>{'yes' if wf.returns else ''}</td></tr>"
+        f"<td>{'yes' if wf.returns else ''}</td>"
+        f"<td>{' '.join(_badge(st) + ' ' + str(n) for st, n in sorted(counts.get(name, {}).items()))}</td></tr>"
         for name, wf in sorted(registry.items())
     )
-    return site.page("workflows", f"<table><tr><th>workflow</th><th>steps</th><th>first step</th><th>kinds</th><th>composable</th></tr>{rows}</table>", "workflows", "", None)
+    return site.page("workflows", "workflows", f"<table><tr><th>workflow</th><th>steps</th><th>first step</th><th>kinds</th><th>composable</th><th>runs</th></tr>{rows}</table>", "workflows", "", None)
 
 
 def _step_target(step) -> str:
@@ -281,7 +285,7 @@ def _step_target(step) -> str:
     return "→ <code>done</code>"
 
 
-def render_workflow(site: Site, wf: Workflow, registry: dict, source: str) -> str:
+def render_workflow(site: Site, wf: Workflow, registry: dict, source: str, states: list) -> str:
     rows = []
     for step in wf.steps.values():
         what = step.run if step.run else step.prompt
@@ -312,24 +316,27 @@ def render_workflow(site: Site, wf: Workflow, registry: dict, source: str) -> st
         + "</table>"
     )
     returns = render_value(wf.returns) if wf.returns else "<p class='muted'>none — top-level workflow</p>"
+    mine = [s for s in states if s.workflow == wf.name]
+    runs = _run_rows(mine, False) if mine else "<p class='muted'>none yet</p>"
     body = (
         f"<div class='graph-wrap'>{graph.render_svg(wf, {}, _child_links(wf.steps, registry))}</div>"
+        f"<h2>runs</h2>{runs}"
         f"<h2>steps</h2>{table}<h2>returns</h2>{returns}"
         f"<h2>source</h2><details><summary>yaml</summary><pre>{_e(source)}</pre></details>"
     )
     crumbs = f"<a href='/workflows'>workflows</a> / {_e(wf.name)}"
-    return site.page(f"<code>{_e(wf.name)}</code>", body, "workflows", crumbs, None)
+    return site.page(wf.name, f"<code>{_e(wf.name)}</code>", body, "workflows", crumbs, None)
 
 
 def render_log(site: Site, entries: list) -> str:
     rows = "".join(
         f"<tr><td class='muted mono'>{_e(e['at'])}</td>"
-        f"<td><a href='{input_url(e['input'])}'><code>{_e(e['input'])}</code></a></td>"
+        f"<td><a href='{run_url(e['input'])}'><code>{_e(e['input'])}</code></a></td>"
         f"<td><code>{_e(e['event'])}</code></td><td>{render_value(e['detail'])}</td></tr>"
         for e in reversed(entries)
     )
-    body = f"<table><tr><th>at</th><th>input</th><th>event</th><th>detail</th></tr>{rows}</table><p class='muted'>last {LOG_TAIL} events, newest first</p>"
-    return site.page("log", body, "log", "", INDEX_REFRESH_SECONDS)
+    body = f"<table><tr><th>at</th><th>run</th><th>event</th><th>detail</th></tr>{rows}</table><p class='muted'>last {LOG_TAIL} events, newest first</p>"
+    return site.page("log", "log", body, "log", "", INDEX_REFRESH_SECONDS)
 
 
 # ---- writes -------------------------------------------------------------------
@@ -408,7 +415,7 @@ def make_handler(config: RunnerConfig, registry: dict, sources: dict, token: str
             self.end_headers()
 
         def _error(self, status: int, message: str) -> None:
-            self._html(status, site.page(str(status), f"<p>{_e(message)}</p>", "", "", None))
+            self._html(status, site.page(str(status), str(status), f"<p>{_e(message)}</p>", "", "", None))
 
         def _parts(self) -> list:
             return [unquote(p) for p in urlsplit(self.path).path.strip("/").split("/") if p]
@@ -416,27 +423,29 @@ def make_handler(config: RunnerConfig, registry: dict, sources: dict, token: str
         def do_GET(self):
             parts = self._parts()
             if not parts:
-                return self._html(200, render_index(site, list_states(config.inputs_dir)))
+                return self._redirect("/workflows")
+            if parts == ["runs"]:
+                return self._html(200, render_runs(site, list_states(config.inputs_dir)))
             if parts == ["theme.css"]:
                 return self._send(200, theme_css(project_theme), "text/css; charset=utf-8")
             if parts == ["log"]:
                 return self._html(200, render_log(site, tail_log(config.log_path, LOG_TAIL)))
             if parts == ["workflows"]:
-                return self._html(200, render_workflows(site, registry))
+                return self._html(200, render_workflows(site, registry, list_states(config.inputs_dir)))
             if len(parts) == 2 and parts[0] == "workflows":
                 if parts[1] not in registry:
                     return self._error(404, f"unknown workflow `{parts[1]}`")
-                return self._html(200, render_workflow(site, registry[parts[1]], registry, sources[parts[1]]))
-            if len(parts) == 2 and parts[0] == "inputs":
+                return self._html(200, render_workflow(site, registry[parts[1]], registry, sources[parts[1]], list_states(config.inputs_dir)))
+            if len(parts) == 2 and parts[0] == "runs":
                 input_id = parts[1]
                 state_path = state.state_path(config.inputs_dir, input_id)
                 if not state_path.exists():
-                    return self._error(404, f"no input `{input_id}`")
+                    return self._error(404, f"no run `{input_id}`")
                 s = state.load_state(state_path)
                 children = [c for c in list_states(config.inputs_dir) if c.input["id"].startswith(input_id + ".")]
                 return self._html(
                     200,
-                    render_input(
+                    render_run(
                         site, s, registry[s.workflow], registry,
                         list_runs(config.runs_dir, input_id),
                         list_decisions(config.decisions_dir, input_id),
@@ -447,7 +456,7 @@ def make_handler(config: RunnerConfig, registry: dict, sources: dict, token: str
 
         def do_POST(self):
             parts = self._parts()
-            if len(parts) != 3 or parts[0] != "inputs" or parts[2] not in ("decide", "retry"):
+            if len(parts) != 3 or parts[0] != "runs" or parts[2] not in ("decide", "retry"):
                 return self._error(404, "not found")
             sent_origin = self.headers.get("Origin")
             if sent_origin is not None and sent_origin != origin:
@@ -461,7 +470,7 @@ def make_handler(config: RunnerConfig, registry: dict, sources: dict, token: str
                     retry(config, parts[1], form, token, clock())
             except WriteError as exc:
                 return self._error(exc.status, str(exc))
-            return self._redirect(input_url(parts[1]))
+            return self._redirect(run_url(parts[1]))
 
     return Handler
 

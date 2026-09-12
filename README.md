@@ -55,12 +55,17 @@ state; `tick` (or a running `tick --loop`) acts on it — one ticker, one writer
 
 `workflow-runner serve` (127.0.0.1 only, stdlib, no JavaScript):
 
-- **inputs** — status tree, auto-refreshing.
-- **input** — the workflow's step graph with visited / current / halted steps
-  highlighted, pending decisions with approve / reject, retry for HALTED,
-  every run record (inputs, outputs or error, duration), child workflows, history.
-- **workflows** — step graph (child workflows are clickable), step table
-  (kind, run/prompt, model, tools, inputs, outputs, routes, gates), returns, YAML.
+Two nouns: a **workflow** is a definition; a **run** is one input's passage
+through it (the CLI calls a run by its input id).
+
+- **workflows** — every definition with run counts by status.
+- **workflow** — orthogonal step graph (child workflows are clickable), its
+  runs, step table (kind, run/prompt, model, tools, inputs, outputs, routes,
+  gates), returns, YAML.
+- **runs** — every run across workflows, auto-refreshing.
+- **run** — the graph with visited / current / halted steps highlighted,
+  pending decisions with approve / reject, retry for HALTED, each executed
+  step (step inputs, outputs or error, duration), child runs, history.
 - **log** — unified event tail.
 
 Writes go through the same code as the CLI (`decisions.respond`,
