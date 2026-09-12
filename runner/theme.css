@@ -1,0 +1,114 @@
+/* workflow-runner default theme.
+   Everything visual hangs off these variables. A project overrides any of them
+   in <project>/workflow/theme.css — that file is appended after this one. */
+:root {
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #eef0f3;
+  --border: #d9dde3;
+  --fg: #1c1f24;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --link: var(--accent);
+  --nav-bg: #14171c;
+  --nav-fg: #e6e8eb;
+
+  --running: #2563eb;
+  --waiting: #d97706;
+  --halted: #dc2626;
+  --done: #16a34a;
+
+  --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --content-width: 1200px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216;
+    --surface: #171b21;
+    --surface-2: #1f242c;
+    --border: #2b323c;
+    --fg: #e6e8eb;
+    --muted: #8b939f;
+    --accent: #60a5fa;
+    --nav-bg: #0a0c0f;
+    --running: #60a5fa;
+    --waiting: #fbbf24;
+    --halted: #f87171;
+    --done: #4ade80;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font); }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--surface-2); padding: 10px 12px; border-radius: var(--radius); overflow: auto; margin: 0; }
+
+nav { background: var(--nav-bg); color: var(--nav-fg); padding: 0 24px; display: flex; align-items: center; gap: 22px; height: 46px; }
+nav .brand { font-weight: 600; margin-right: 8px; color: var(--nav-fg); }
+nav a { color: var(--nav-fg); opacity: .8; }
+nav a.active, nav a:hover { opacity: 1; text-decoration: none; }
+nav .project { margin-left: auto; color: var(--nav-fg); opacity: .6; font-size: 12.5px; }
+
+main { max-width: var(--content-width); margin: 0 auto; padding: 22px 24px 60px; }
+h1 { font-size: 20px; margin: 0 0 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+h2 { font-size: 15px; margin: 26px 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+h3 { font-size: 14px; margin: 0; }
+.crumbs { color: var(--muted); font-size: 12.5px; margin-bottom: 8px; }
+.muted { color: var(--muted); }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin: 10px 0; }
+.card header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.card header .when { margin-left: auto; color: var(--muted); font-size: 12.5px; }
+
+table { border-collapse: collapse; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+th, td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+th { background: var(--surface-2); font-weight: 600; font-size: 12.5px; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+table.kv th { width: 180px; font-weight: 500; color: var(--fg); background: transparent; }
+table.plain { border: 0; background: transparent; }
+table.plain td, table.plain th { padding: 4px 8px; border: 0; }
+
+.badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff; background: var(--muted); }
+.badge.RUNNING { background: var(--running); }
+.badge.WAITING_DECISION { background: var(--waiting); }
+.badge.HALTED { background: var(--halted); }
+.badge.DONE { background: var(--done); }
+
+.text { white-space: pre-wrap; }
+ol.values, ul.values { margin: 4px 0; padding-left: 22px; }
+ol.values li { margin: 3px 0; }
+
+.decision { border-left: 4px solid var(--border); }
+.decision.pending { border-left-color: var(--waiting); }
+.decision .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+form.inline { display: inline-flex; gap: 6px; align-items: center; margin: 0; }
+input[type=text] { width: 320px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--fg); }
+button { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--halted); }
+details summary { cursor: pointer; color: var(--muted); }
+details[open] summary { margin-bottom: 6px; }
+
+/* step graph */
+.graph-wrap { overflow-x: auto; padding: 6px 0; }
+.graph .node rect { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.graph .node text { fill: var(--fg); font-family: var(--mono); }
+.graph .node-id { font-size: 12.5px; font-weight: 600; }
+.graph .node-kind { font-size: 10.5px; fill: var(--muted); }
+.graph .node.terminal rect { fill: var(--surface-2); stroke-dasharray: 4 3; }
+.graph .node.visited rect { stroke: var(--done); }
+.graph .node.current rect { stroke: var(--running); stroke-width: 3; }
+.graph .node.waiting rect { stroke: var(--waiting); stroke-width: 3; }
+.graph .node.halted rect { stroke: var(--halted); stroke-width: 3; }
+.graph .node.reached rect { stroke: var(--fg); stroke-width: 2.5; stroke-dasharray: none; }
+.graph .edge { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+.graph .edge.back { stroke-dasharray: 5 4; }
+.graph .arrowhead { fill: var(--muted); }
+.graph .edge-label { font-size: 10.5px; fill: var(--muted); font-family: var(--mono);
+  paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.graph a:hover rect { stroke: var(--accent); }

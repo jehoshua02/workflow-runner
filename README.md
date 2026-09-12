@@ -42,9 +42,43 @@ workflow-runner start <workflow> --input-json c.json
 workflow-runner tick                    # run once: advance everything that can move
 workflow-runner tick --loop --interval 60
 workflow-runner status                  # tree: inputs + child workflows
-workflow-runner approve <input-id> [gate]        # answer a pending decision + tick
-workflow-runner reject <input-id> <reason> [gate] # answer + tick
+workflow-runner approve <input-id> [gate]        # answer a pending decision (write-only)
+workflow-runner reject <input-id> <reason> [gate] # answer a pending decision (write-only)
 workflow-runner retry <input-id>    # HALTED -> RUNNING at the failed step
+workflow-runner serve [--port 8765] # local web UI: browse inputs/runs/decisions/workflows, approve/reject
+```
+
+Only `tick` executes steps. `approve`, `reject`, `retry` and the web UI write
+state; `tick` (or a running `tick --loop`) acts on it — one ticker, one writer.
+
+### Web UI
+
+`workflow-runner serve` (127.0.0.1 only, stdlib, no JavaScript):
+
+Two nouns: a **workflow** is a definition; a **run** is one input's passage
+through it (the CLI calls a run by its input id).
+
+- **workflows** — every definition with run counts by status.
+- **workflow** — orthogonal step graph (child workflows are clickable), its
+  runs, step table (kind, run/prompt, model, tools, inputs, outputs, routes,
+  gates), returns, YAML.
+- **runs** — every run across workflows, auto-refreshing.
+- **run** — the graph with visited / current / halted steps highlighted,
+  pending decisions with approve / reject, retry for HALTED, each executed
+  step (step inputs, outputs or error, duration), child runs, history.
+- **log** — unified event tail.
+
+Writes go through the same code as the CLI (`decisions.respond`,
+`control.retry`). Every form carries a per-server random token; cross-origin
+POSTs are refused.
+
+**Theming:** all colors, fonts and sizes are CSS variables in
+`runner/theme.css` (light + dark via `prefers-color-scheme`). Put a
+`workflow/theme.css` in your project to override any of them — it is served
+after the default:
+
+```css
+:root { --accent: #7c3aed; --font: "IBM Plex Sans", sans-serif; }
 ```
 
 Defaults resolve only at this edge (CLI + config.yml); the engine requires
